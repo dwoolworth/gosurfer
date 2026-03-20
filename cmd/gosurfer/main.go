@@ -1,0 +1,443 @@
+// gosurfer CLI - persistent browser automation from the command line.
+//
+// Usage:
+//
+//	gosurfer open <url>              Navigate to URL
+//	gosurfer click <selector>        Click an element
+//	gosurfer type <selector> <text>  Type into an element
+//	gosurfer screenshot [file]       Save screenshot (default: screenshot.png)
+//	gosurfer pdf [file]              Save PDF (default: page.pdf)
+//	gosurfer state                   Show DOM state (interactive elements)
+//	gosurfer eval <js>               Evaluate JavaScript
+//	gosurfer cookies                 List all cookies
+//	gosurfer cookie <name> [value]   Get or set a cookie
+//	gosurfer storage                 List all localStorage
+//	gosurfer har <file>              Export HAR recording to file
+//	gosurfer text <selector>         Get text content
+//	gosurfer html                    Get full page HTML
+//	gosurfer back                    Navigate back
+//	gosurfer forward                 Navigate forward
+//	gosurfer reload                  Reload page
+//	gosurfer tabs                    List open tabs
+//	gosurfer close                   Close browser and exit
+//
+// The browser stays running between commands for fast iteration.
+// Set GOSURFER_HEADLESS=false to see the browser window.
+// Set GOSURFER_STEALTH=true for anti-detection mode.
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/dwoolworth/gosurfer"
+)
+
+var (
+	browser *gosurfer.Browser
+	page    *gosurfer.Page
+	har     *gosurfer.HARRecorder
+)
+
+func main() {
+	// Handle single command from args
+	if len(os.Args) > 1 {
+		ensureBrowser()
+		code := runCommand(os.Args[1], os.Args[2:])
+		cleanup()
+		os.Exit(code)
+	}
+
+	// Interactive REPL mode
+	fmt.Println("gosurfer CLI - type 'help' for commands, 'quit' to exit")
+	ensureBrowser()
+
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Print("gosurfer> ")
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			fmt.Print("gosurfer> ")
+			continue
+		}
+		if line == "quit" || line == "exit" {
+			break
+		}
+
+		parts := splitArgs(line)
+		if len(parts) == 0 {
+			fmt.Print("gosurfer> ")
+			continue
+		}
+
+		runCommand(parts[0], parts[1:])
+		fmt.Print("gosurfer> ")
+	}
+
+	cleanup()
+}
+
+func ensureBrowser() {
+	if browser != nil {
+		return
+	}
+
+	headless := os.Getenv("GOSURFER_HEADLESS") != "false"
+	stealth := os.Getenv("GOSURFER_STEALTH") == "true"
+
+	var err error
+	browser, err = gosurfer.NewBrowser(gosurfer.BrowserConfig{
+		Headless:  headless,
+		Stealth:   stealth,
+		NoSandbox: os.Getenv("CHROME_BIN") != "",
+		ExecPath:  os.Getenv("CHROME_BIN"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error launching browser: %v\n", err)
+		os.Exit(1)
+	}
+
+	page, err = browser.NewPage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating page: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func cleanup() {
+	if browser != nil {
+		_ = browser.Close()
+	}
+}
+
+func runCommand(cmd string, args []string) int {
+	switch cmd {
+	case "help":
+		printHelp()
+
+	case "open", "navigate", "goto":
+		if len(args) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: open <url>")
+			return 1
+		}
+		url := args[0]
+		if !strings.Contains(url, "://") {
+			url = "https://" + url
+		}
+		if err := page.Navigate(url); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		title, _ := page.Title()
+		fmt.Printf("Navigated to: %s\nTitle: %s\n", page.URL(), title)
+
+	case "click":
+		if len(args) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: click <selector>")
+			return 1
+		}
+		if err := page.Click(args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Clicked:", args[0])
+
+	case "type":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: type <selector> <text>")
+			return 1
+		}
+		text := strings.Join(args[1:], " ")
+		if err := page.Type(args[0], text); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Typed %q into %s\n", text, args[0])
+
+	case "screenshot":
+		file := "screenshot.png"
+		if len(args) > 0 {
+			file = args[0]
+		}
+		png, err := page.Screenshot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(file, png, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Screenshot saved: %s (%d bytes)\n", file, len(png))
+
+	case "pdf":
+		file := "page.pdf"
+		if len(args) > 0 {
+			file = args[0]
+		}
+		pdf, err := page.PDF()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(file, pdf, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			return 1
+		}
+		fmt.Printf("PDF saved: %s (%d bytes)\n", file, len(pdf))
+
+	case "state":
+		state, err := page.DOMState()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("URL:   %s\nTitle: %s\nElements: %d\nScroll: %.0f%%\n\n",
+			state.URL, state.Title, len(state.Elements), state.ScrollPosition)
+		fmt.Println(state.Tree)
+
+	case "eval":
+		if len(args) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: eval <javascript>")
+			return 1
+		}
+		js := strings.Join(args, " ")
+		if !strings.HasPrefix(js, "()") {
+			js = "() => " + js
+		}
+		val, err := page.Eval(js)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println(val)
+
+	case "text":
+		if len(args) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: text <selector>")
+			return 1
+		}
+		text, err := page.Text(args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println(text)
+
+	case "html":
+		html, err := page.HTML()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println(html)
+
+	case "cookies":
+		cookies, err := page.GetCookies()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if len(cookies) == 0 {
+			fmt.Println("No cookies")
+			return 0
+		}
+		for _, c := range cookies {
+			fmt.Printf("  %-30s = %s  (domain: %s)\n", c.Name, truncateCLI(c.Value, 50), c.Domain)
+		}
+		fmt.Printf("\n%d cookies total\n", len(cookies))
+
+	case "cookie":
+		if len(args) < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: cookie <name> [value]")
+			return 1
+		}
+		if len(args) >= 2 {
+			// Set cookie
+			if err := page.SetCookie(args[0], args[1], "", ""); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return 1
+			}
+			fmt.Printf("Cookie set: %s = %s\n", args[0], args[1])
+		} else {
+			// Get cookie
+			val, err := page.GetCookie(args[0])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return 1
+			}
+			if val == "" {
+				fmt.Printf("Cookie %q not found\n", args[0])
+			} else {
+				fmt.Printf("%s = %s\n", args[0], val)
+			}
+		}
+
+	case "storage":
+		items, err := page.LocalStorageAll()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if len(items) == 0 {
+			fmt.Println("localStorage is empty")
+			return 0
+		}
+		for k, v := range items {
+			fmt.Printf("  %-30s = %s\n", k, truncateCLI(v, 60))
+		}
+		fmt.Printf("\n%d items total\n", len(items))
+
+	case "har":
+		if har == nil {
+			// Start recording
+			har = page.StartHAR()
+			fmt.Println("HAR recording started. Use 'har <file>' again to save.")
+			return 0
+		}
+		if len(args) < 1 {
+			fmt.Printf("HAR recording active: %d entries captured\n", har.Entries())
+			return 0
+		}
+		data, err := har.Export()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(args[0], data, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("HAR saved: %s (%d entries, %d bytes)\n", args[0], har.Entries(), len(data))
+		har = nil
+
+	case "back":
+		if err := page.Back(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Navigated back")
+
+	case "forward":
+		if err := page.Forward(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Navigated forward")
+
+	case "reload":
+		if err := page.Reload(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Reloaded")
+
+	case "tabs":
+		pages, err := browser.Pages()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		for i, p := range pages {
+			title, _ := p.Title()
+			marker := "  "
+			if p.URL() == page.URL() {
+				marker = "> "
+			}
+			fmt.Printf("%s[%d] %s - %s\n", marker, i, title, p.URL())
+		}
+
+	case "close":
+		cleanup()
+		fmt.Println("Browser closed")
+		os.Exit(0)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s (type 'help' for commands)\n", cmd)
+		return 1
+	}
+
+	return 0
+}
+
+func printHelp() {
+	fmt.Println(`gosurfer CLI commands:
+
+  Navigation:
+    open <url>              Navigate to URL (auto-adds https://)
+    back                    Navigate back in history
+    forward                 Navigate forward
+    reload                  Reload current page
+    tabs                    List open tabs
+
+  Interaction:
+    click <selector>        Click an element by CSS selector
+    type <selector> <text>  Type text into an element
+    eval <js>               Evaluate JavaScript expression
+
+  Extraction:
+    state                   Show indexed DOM state (what the AI agent sees)
+    text <selector>         Get text content of element
+    html                    Get full page HTML
+    screenshot [file]       Save screenshot (default: screenshot.png)
+    pdf [file]              Save PDF (default: page.pdf)
+
+  Storage:
+    cookies                 List all cookies
+    cookie <name> [value]   Get or set a cookie
+    storage                 List all localStorage items
+
+  Recording:
+    har                     Start HAR recording (first call)
+    har <file>              Save HAR and stop recording (second call)
+
+  Other:
+    help                    Show this help
+    close / quit / exit     Close browser and exit
+
+  Environment:
+    GOSURFER_HEADLESS=false   Show browser window
+    GOSURFER_STEALTH=true     Enable anti-detection mode
+    CHROME_BIN=/path/chrome   Custom Chrome path`)
+}
+
+func splitArgs(line string) []string {
+	var args []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := byte(0)
+
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if inQuote {
+			if c == quoteChar {
+				inQuote = false
+			} else {
+				current.WriteByte(c)
+			}
+		} else if c == '"' || c == '\'' {
+			inQuote = true
+			quoteChar = c
+		} else if c == ' ' || c == '\t' {
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		} else {
+			current.WriteByte(c)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
+}
+
+func truncateCLI(s string, max int) string {
+	if len(s) > max {
+		return s[:max] + "..."
+	}
+	return s
+}

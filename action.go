@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-rod/rod/lib/proto"
@@ -212,6 +213,52 @@ func DefaultActions() *ActionRegistry {
 			{Name: "path", Type: "string", Description: "The file path to upload.", Required: true},
 		},
 		Run: actionUploadFile,
+	})
+
+	r.Register(&ActionDef{
+		Name:        "get_cookies",
+		Description: "Get all cookies for the current page.",
+		Params:      nil,
+		Run:         actionGetCookies,
+	})
+
+	r.Register(&ActionDef{
+		Name:        "set_cookie",
+		Description: "Set a cookie on the current page.",
+		Params: []ParamDef{
+			{Name: "name", Type: "string", Description: "Cookie name.", Required: true},
+			{Name: "value", Type: "string", Description: "Cookie value.", Required: true},
+		},
+		Run: actionSetCookie,
+	})
+
+	r.Register(&ActionDef{
+		Name:        "get_storage",
+		Description: "Get all localStorage key-value pairs for the current page.",
+		Params:      nil,
+		Run:         actionGetStorage,
+	})
+
+	r.Register(&ActionDef{
+		Name:        "set_storage",
+		Description: "Set a localStorage value on the current page.",
+		Params: []ParamDef{
+			{Name: "key", Type: "string", Description: "Storage key.", Required: true},
+			{Name: "value", Type: "string", Description: "Storage value.", Required: true},
+		},
+		Run: actionSetStorage,
+	})
+
+	r.Register(&ActionDef{
+		Name:        "drag",
+		Description: "Drag an element to another element or to coordinates.",
+		Params: []ParamDef{
+			{Name: "from_index", Type: "int", Description: "Element index to drag from.", Required: true},
+			{Name: "to_index", Type: "int", Description: "Element index to drag to (use this OR to_x/to_y).", Required: false},
+			{Name: "to_x", Type: "float", Description: "Target X coordinate (use with to_y instead of to_index).", Required: false},
+			{Name: "to_y", Type: "float", Description: "Target Y coordinate (use with to_x instead of to_index).", Required: false},
+		},
+		Run: actionDrag,
 	})
 
 	r.Register(&ActionDef{
@@ -573,6 +620,113 @@ func actionUploadFile(_ context.Context, ac ActionContext, params map[string]int
 		return "", fmt.Errorf("upload file: %w", err)
 	}
 	return fmt.Sprintf("Uploaded %q to element [%d]", path, idx), nil
+}
+
+func actionGetCookies(_ context.Context, ac ActionContext, _ map[string]interface{}) (string, error) {
+	cookies, err := ac.Page.GetCookies()
+	if err != nil {
+		return "", err
+	}
+	if len(cookies) == 0 {
+		return "No cookies", nil
+	}
+	var lines []string
+	for _, c := range cookies {
+		lines = append(lines, fmt.Sprintf("%s=%s (domain: %s)", c.Name, c.Value, c.Domain))
+	}
+	return fmt.Sprintf("%d cookies:\n%s", len(cookies), strings.Join(lines, "\n")), nil
+}
+
+func actionSetCookie(_ context.Context, ac ActionContext, params map[string]interface{}) (string, error) {
+	name, _ := params["name"].(string)
+	value, _ := params["value"].(string)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if err := ac.Page.SetCookie(name, value, "", ""); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Cookie set: %s=%s", name, value), nil
+}
+
+func actionGetStorage(_ context.Context, ac ActionContext, _ map[string]interface{}) (string, error) {
+	items, err := ac.Page.LocalStorageAll()
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
+		return "localStorage is empty", nil
+	}
+	var lines []string
+	for k, v := range items {
+		if len(v) > 100 {
+			v = v[:100] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%s=%s", k, v))
+	}
+	return fmt.Sprintf("%d items:\n%s", len(items), strings.Join(lines, "\n")), nil
+}
+
+func actionSetStorage(_ context.Context, ac ActionContext, params map[string]interface{}) (string, error) {
+	key, _ := params["key"].(string)
+	value, _ := params["value"].(string)
+	if key == "" {
+		return "", fmt.Errorf("key is required")
+	}
+	if err := ac.Page.LocalStorageSet(key, value); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("localStorage set: %s=%s", key, value), nil
+}
+
+func actionDrag(_ context.Context, ac ActionContext, params map[string]interface{}) (string, error) {
+	fromIdx, err := toInt(params["from_index"])
+	if err != nil {
+		return "", fmt.Errorf("from_index is required (int)")
+	}
+	fromEl, ok := ac.State.Elements[fromIdx]
+	if !ok {
+		return "", fmt.Errorf("from element index %d not found", fromIdx)
+	}
+
+	// Get source element
+	rodFromEl, err := ac.Page.rod.Element(fromEl.CSSSelector)
+	if err != nil {
+		return "", fmt.Errorf("find from element [%d]: %w", fromIdx, err)
+	}
+	wrappedFrom := &Element{rod: rodFromEl, page: ac.Page}
+
+	// Target: either element index or coordinates
+	if toIdxVal, hasToIdx := params["to_index"]; hasToIdx {
+		toIdx, err := toInt(toIdxVal)
+		if err != nil {
+			return "", fmt.Errorf("to_index must be int")
+		}
+		toEl, ok := ac.State.Elements[toIdx]
+		if !ok {
+			return "", fmt.Errorf("to element index %d not found", toIdx)
+		}
+		rodToEl, err := ac.Page.rod.Element(toEl.CSSSelector)
+		if err != nil {
+			return "", fmt.Errorf("find to element [%d]: %w", toIdx, err)
+		}
+		wrappedTo := &Element{rod: rodToEl, page: ac.Page}
+		if err := wrappedFrom.DragTo(wrappedTo); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Dragged element [%d] to element [%d]", fromIdx, toIdx), nil
+	}
+
+	// Coordinate target
+	toX, errX := toFloat(params["to_x"])
+	toY, errY := toFloat(params["to_y"])
+	if errX != nil || errY != nil {
+		return "", fmt.Errorf("provide to_index OR to_x+to_y coordinates")
+	}
+	if err := wrappedFrom.DragToCoordinates(toX, toY); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Dragged element [%d] to (%.0f, %.0f)", fromIdx, toX, toY), nil
 }
 
 func actionDone(_ context.Context, _ ActionContext, params map[string]interface{}) (string, error) {
