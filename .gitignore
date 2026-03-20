@@ -1,0 +1,33 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+gopup-example
+/examples/*/main
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+screenshot.png
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Browser cache (rod downloads)
+.cache/
+
+# Environment / secrets
+.env
+.env.*
