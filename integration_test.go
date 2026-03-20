@@ -112,6 +112,40 @@ func testServer() *httptest.Server {
 </body></html>`)
 	})
 
+	mux.HandleFunc("/drag", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
+<html><head><title>Drag Test</title></head>
+<body>
+  <div id="draggable" draggable="true"
+       style="width:80px;height:80px;background:blue;position:absolute;left:20px;top:20px;cursor:grab;"
+       ondragstart="event.dataTransfer.setData('text/plain','dragged')">
+    Drag Me
+  </div>
+  <div id="dropzone"
+       style="width:200px;height:200px;background:#ccc;position:absolute;left:250px;top:20px;border:2px dashed #999;"
+       ondragover="event.preventDefault()"
+       ondrop="event.preventDefault(); document.getElementById('status').textContent='dropped'">
+    Drop Here
+  </div>
+  <div id="status">waiting</div>
+  <script>
+    // Also listen for mouseup inside dropzone as fallback for CDP-driven drags
+    document.getElementById('dropzone').addEventListener('mouseup', function(e) {
+      document.getElementById('status').textContent = 'dropped';
+    });
+  </script>
+</body></html>`)
+	})
+
+	mux.HandleFunc("/storage", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "server_cookie", Value: "from_server", Path: "/"})
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
+<html><head><title>Storage Test</title></head>
+<body><h1>Storage Page</h1></body></html>`)
+	})
+
 	return httptest.NewServer(mux)
 }
 
@@ -1300,5 +1334,287 @@ func TestAgent_RunWithMockLLM(t *testing.T) {
 	}
 	if result.Steps < 2 {
 		t.Errorf("expected at least 2 steps, got %d", result.Steps)
+	}
+}
+
+// --- New Action Tests: Cookies, Storage, Drag ---
+
+func TestAction_GetCookies(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL + "/storage"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.WaitLoad()
+
+	// The /storage handler sets a "server_cookie" via Set-Cookie header
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	result, err := actionGetCookies(context.Background(), ac, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(result, "server_cookie") {
+		t.Errorf("expected server_cookie in result, got %q", result)
+	}
+	if !strings.Contains(result, "cookie") {
+		t.Errorf("result should mention cookies: %q", result)
+	}
+}
+
+func TestAction_SetCookie(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	result, err := actionSetCookie(context.Background(), ac, map[string]interface{}{
+		"name": "action_cookie", "value": "action_value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "action_cookie=action_value") {
+		t.Errorf("result = %q", result)
+	}
+
+	// Verify cookie was actually set
+	val, err := page.GetCookie("action_cookie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "action_value" {
+		t.Errorf("cookie value = %q, want %q", val, "action_value")
+	}
+}
+
+func TestAction_SetCookie_MissingName(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	_, err := actionSetCookie(context.Background(), ac, map[string]interface{}{
+		"value": "v",
+	})
+	if err == nil {
+		t.Error("expected error for missing name")
+	}
+}
+
+func TestAction_GetStorage(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set some localStorage first
+	if err := page.LocalStorageSet("action_key", "action_val"); err != nil {
+		t.Fatal(err)
+	}
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	result, err := actionGetStorage(context.Background(), ac, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "action_key") {
+		t.Errorf("expected action_key in result, got %q", result)
+	}
+}
+
+func TestAction_GetStorage_Empty(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.LocalStorageClear()
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	result, err := actionGetStorage(context.Background(), ac, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "localStorage is empty" {
+		t.Errorf("expected empty message, got %q", result)
+	}
+}
+
+func TestAction_SetStorage(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.LocalStorageClear()
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	result, err := actionSetStorage(context.Background(), ac, map[string]interface{}{
+		"key": "set_key", "value": "set_val",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "set_key=set_val") {
+		t.Errorf("result = %q", result)
+	}
+
+	// Verify it was stored
+	val, err := page.LocalStorageGet("set_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "set_val" {
+		t.Errorf("localStorage value = %q, want %q", val, "set_val")
+	}
+}
+
+func TestAction_SetStorage_MissingKey(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	_, err := actionSetStorage(context.Background(), ac, map[string]interface{}{
+		"value": "v",
+	})
+	if err == nil {
+		t.Error("expected error for missing key")
+	}
+}
+
+func TestAction_Drag(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL + "/drag"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.WaitLoad()
+	time.Sleep(300 * time.Millisecond)
+
+	state, err := page.DOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ac := ActionContext{Page: page, State: state, Browser: testBrowser}
+
+	// Find the draggable and dropzone element indices
+	var fromIdx, toIdx int
+	foundFrom, foundTo := false, false
+	for idx, el := range state.Elements {
+		if el.Attributes["id"] == "draggable" {
+			fromIdx = idx
+			foundFrom = true
+		}
+		if el.Attributes["id"] == "dropzone" {
+			toIdx = idx
+			foundTo = true
+		}
+	}
+
+	if !foundFrom || !foundTo {
+		t.Skipf("could not find draggable/dropzone elements in DOM state (from=%v, to=%v)", foundFrom, foundTo)
+	}
+
+	// Test element-to-element drag via action
+	result, err := actionDrag(context.Background(), ac, map[string]interface{}{
+		"from_index": fromIdx,
+		"to_index":   toIdx,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "Dragged") {
+		t.Errorf("result = %q", result)
+	}
+}
+
+func TestAction_Drag_ToCoordinates(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL + "/drag"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.WaitLoad()
+	time.Sleep(300 * time.Millisecond)
+
+	state, err := page.DOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ac := ActionContext{Page: page, State: state, Browser: testBrowser}
+
+	// Find draggable index
+	var fromIdx int
+	found := false
+	for idx, el := range state.Elements {
+		if el.Attributes["id"] == "draggable" {
+			fromIdx = idx
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Skip("could not find draggable element in DOM state")
+	}
+
+	result, err := actionDrag(context.Background(), ac, map[string]interface{}{
+		"from_index": fromIdx,
+		"to_x":       350.0,
+		"to_y":       120.0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "Dragged") {
+		t.Errorf("result = %q", result)
+	}
+}
+
+func TestAction_Drag_MissingTarget(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL + "/drag"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.WaitLoad()
+	time.Sleep(300 * time.Millisecond)
+
+	state, err := page.DOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ac := ActionContext{Page: page, State: state, Browser: testBrowser}
+
+	// Find draggable index
+	var fromIdx int
+	for idx, el := range state.Elements {
+		if el.Attributes["id"] == "draggable" {
+			fromIdx = idx
+			break
+		}
+	}
+
+	// Missing both to_index and to_x/to_y
+	_, err = actionDrag(context.Background(), ac, map[string]interface{}{
+		"from_index": fromIdx,
+	})
+	if err == nil {
+		t.Error("expected error when no target specified")
+	}
+}
+
+func TestAction_GetCookies_Empty(t *testing.T) {
+	page := newPage(t)
+	if err := page.Navigate(ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.ClearCookies()
+
+	ac := ActionContext{Page: page, State: &DOMState{}, Browser: testBrowser}
+	result, err := actionGetCookies(context.Background(), ac, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "No cookies" {
+		t.Errorf("expected 'No cookies', got %q", result)
 	}
 }

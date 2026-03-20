@@ -408,6 +408,7 @@ func splitArgs(line string) []string {
 	var current strings.Builder
 	inQuote := false
 	quoteChar := byte(0)
+	hasQuote := false
 
 	for i := 0; i < len(line); i++ {
 		c := line[i]
@@ -419,17 +420,19 @@ func splitArgs(line string) []string {
 			}
 		} else if c == '"' || c == '\'' {
 			inQuote = true
+			hasQuote = true
 			quoteChar = c
 		} else if c == ' ' || c == '\t' {
-			if current.Len() > 0 {
+			if current.Len() > 0 || hasQuote {
 				args = append(args, current.String())
 				current.Reset()
+				hasQuote = false
 			}
 		} else {
 			current.WriteByte(c)
 		}
 	}
-	if current.Len() > 0 {
+	if current.Len() > 0 || hasQuote {
 		args = append(args, current.String())
 	}
 	return args

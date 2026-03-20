@@ -3,6 +3,7 @@ package gosurfer
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"github.com/go-rod/rod/lib/proto"
 )
@@ -57,16 +58,24 @@ func (p *Page) GetCookie(name string) (string, error) {
 
 // SetCookie sets a single cookie on the current page.
 func (p *Page) SetCookie(name, value, domain, path string) error {
+	if path == "" {
+		path = "/"
+	}
+
 	if domain == "" {
+		// Use the page URL directly; CDP's NetworkSetCookie accepts a URL field
+		// which automatically derives the correct domain.
 		info, err := p.rod.Info()
 		if err != nil {
 			return fmt.Errorf("gosurfer: get page info: %w", err)
 		}
-		// Extract domain from URL
-		domain = info.URL
-	}
-	if path == "" {
-		path = "/"
+		pageURL := info.URL
+		// Extract hostname from URL for the domain field
+		if u, err := url.Parse(pageURL); err == nil {
+			domain = u.Hostname()
+		} else {
+			domain = pageURL
+		}
 	}
 
 	_, err := proto.NetworkSetCookie{
@@ -103,7 +112,16 @@ func (p *Page) SetCookies(cookies []Cookie) error {
 
 // DeleteCookies deletes cookies matching the given name.
 func (p *Page) DeleteCookies(name string) error {
-	return proto.NetworkDeleteCookies{Name: name}.Call(p.rod)
+	// CDP requires at least one of url or domain; derive domain from page URL.
+	info, err := p.rod.Info()
+	if err != nil {
+		return fmt.Errorf("gosurfer: get page info: %w", err)
+	}
+	domain := info.URL
+	if u, parseErr := url.Parse(info.URL); parseErr == nil {
+		domain = u.Hostname()
+	}
+	return proto.NetworkDeleteCookies{Name: name, Domain: domain}.Call(p.rod)
 }
 
 // ClearCookies deletes all cookies.
