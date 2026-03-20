@@ -8,7 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /gosurfer-example ./examples/search/ \
     && upx --best --lzma /gosurfer-example
 
-# Stage 2: Runtime (~90MB total)
+# Stage 2: Runtime (~945MB with Chromium + shared libs)
 FROM alpine:3.20
 RUN apk add --no-cache \
     chromium \
