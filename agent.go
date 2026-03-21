@@ -55,6 +55,11 @@ type AgentConfig struct {
 
 	// Stealth enables anti-detection mode on the browser.
 	Stealth bool
+
+	// DisableSummary disables LLM-powered context summarization for long tasks.
+	// When false (default), the agent summarizes older steps to maintain awareness
+	// of earlier context beyond the 5-step recent history window.
+	DisableSummary bool
 }
 
 // StepInfo provides information about a completed agent step.
@@ -89,16 +94,18 @@ type AgentResult struct {
 
 // Agent is an LLM-driven autonomous browser that completes tasks.
 type Agent struct {
-	config        AgentConfig
-	browser       *Browser
-	page          *Page
-	actions       *ActionRegistry
-	history       []StepInfo
-	tokens        TokenUsage
-	ownsBrowser   bool
-	cancelDialogs func()
-	recentActions []string
-	secrets       *Secrets
+	config         AgentConfig
+	browser        *Browser
+	page           *Page
+	actions        *ActionRegistry
+	history        []StepInfo
+	tokens         TokenUsage
+	ownsBrowser    bool
+	cancelDialogs  func()
+	recentActions  []string
+	secrets        *Secrets
+	contextSummary string // running LLM-generated summary of older steps
+	summarizedUpTo int    // index into history: steps [0..summarizedUpTo) are summarized
 }
 
 // NewAgent creates a new browsing agent.
@@ -246,6 +253,9 @@ func (a *Agent) step(ctx context.Context, stepNum int) (StepInfo, bool, error) {
 		return info, false, fmt.Errorf("get DOM state: %w", err)
 	}
 
+	// Summarize older context if needed (before building messages)
+	a.summarizeIfNeeded(ctx)
+
 	// Build messages for LLM
 	messages := a.buildMessages(state, stepNum)
 
@@ -366,16 +376,98 @@ func (a *Agent) isLooping() bool {
 	return true
 }
 
-// buildMessages constructs the LLM conversation for the current step.
-func (a *Agent) buildMessages(state *DOMState, stepNum int) []ChatMessage {
-	messages := []ChatMessage{
-		TextMessage("system", buildSystemPrompt(a.config.Task, a.actions)),
+// historyWindow is the number of recent steps kept verbatim in the LLM context.
+const historyWindow = 5
+
+// summaryBatchSize is the minimum number of unsummarized steps outside the
+// window before triggering a new summarization call.
+const summaryBatchSize = 3
+
+// summarizeIfNeeded uses the LLM to compress older steps into a running summary.
+// Called before buildMessages so the summary is available for the current step.
+// Errors are non-fatal: the agent continues without a summary if the call fails.
+func (a *Agent) summarizeIfNeeded(ctx context.Context) {
+	if a.config.DisableSummary {
+		return
 	}
 
-	// Add history summary (last 5 steps to stay within context)
+	outsideWindow := len(a.history) - historyWindow
+	if outsideWindow <= 0 {
+		return
+	}
+
+	unsummarized := outsideWindow - a.summarizedUpTo
+	if unsummarized < summaryBatchSize && a.contextSummary != "" {
+		return
+	}
+
+	// Build the step descriptions to summarize
+	var newSteps strings.Builder
+	for _, h := range a.history[a.summarizedUpTo:outsideWindow] {
+		fmt.Fprintf(&newSteps, "Step %d: Action=%s", h.Step, h.Action)
+		if h.Result != "" {
+			fmt.Fprintf(&newSteps, " Result=%s", truncate(h.Result, 200))
+		}
+		if h.Error != nil {
+			fmt.Fprintf(&newSteps, " Error=%s", h.Error.Error())
+		}
+		newSteps.WriteString("\n")
+	}
+
+	prompt := "Summarize the browser automation progress so far. "
+	if a.contextSummary != "" {
+		prompt += "Previous summary:\n" + a.contextSummary + "\n\nNew steps:\n"
+	} else {
+		prompt += "Steps completed:\n"
+	}
+	prompt += newSteps.String()
+	prompt += "\nProduce a concise updated summary (under 200 words) of what has been accomplished, key data found, and progress toward the goal. Output only the summary."
+
+	messages := []ChatMessage{
+		TextMessage("system", "You are a concise summarizer. Output only the summary, no preamble."),
+		TextMessage("user", prompt),
+	}
+
+	resp, err := a.config.LLM.ChatCompletion(ctx, messages,
+		WithMaxTokens(512),
+		WithTemperature(0.0),
+	)
+	if err != nil {
+		if a.config.Verbose {
+			log.Printf("[gosurfer] context summarization failed: %v", err)
+		}
+		return
+	}
+
+	a.contextSummary = resp.Content
+	a.summarizedUpTo = outsideWindow
+
+	// Track token usage from summarization calls
+	a.tokens.PromptTokens += resp.Usage.PromptTokens
+	a.tokens.CompletionTokens += resp.Usage.CompletionTokens
+	a.tokens.TotalTokens += resp.Usage.TotalTokens
+
+	if a.config.Verbose {
+		log.Printf("[gosurfer] context summarized (%d steps compressed)", outsideWindow)
+	}
+}
+
+// buildMessages constructs the LLM conversation for the current step.
+func (a *Agent) buildMessages(state *DOMState, stepNum int) []ChatMessage {
+	// Build system prompt, injecting context summary if available
+	systemPrompt := buildSystemPrompt(a.config.Task, a.actions)
+	if a.contextSummary != "" {
+		systemPrompt += "\n\n## Context from Earlier Steps\n" + a.contextSummary
+	}
+
+	messages := []ChatMessage{
+		TextMessage("system", systemPrompt),
+	}
+
+	// Add recent step history (last N steps verbatim)
 	historyStart := 0
-	if len(a.history) > 5 {
-		historyStart = len(a.history) - 5
+	if len(a.history) > historyWindow {
+		historyStart = len(a.history) - historyWindow
 	}
 	for _, h := range a.history[historyStart:] {
 		summary := fmt.Sprintf("Step %d: Action=%s", h.Step, h.Action)

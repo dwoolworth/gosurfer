@@ -376,3 +376,202 @@ func TestNewOllama(t *testing.T) {
 		t.Error("should use default Ollama port")
 	}
 }
+
+// --- recordingMockLLM records calls for assertion ---
+
+type recordingMockLLM struct {
+	response string
+	err      error
+	calls    [][]ChatMessage
+}
+
+func (m *recordingMockLLM) Name() string { return "recording-mock" }
+
+func (m *recordingMockLLM) ChatCompletion(_ context.Context, msgs []ChatMessage, _ ...ChatOption) (*ChatResponse, error) {
+	m.calls = append(m.calls, msgs)
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &ChatResponse{
+		Content: m.response,
+		Usage:   TokenUsage{PromptTokens: 50, CompletionTokens: 30, TotalTokens: 80},
+	}, nil
+}
+
+// --- Context Summarization Tests ---
+
+func TestSummarizeIfNeeded_NotTriggeredUnder5Steps(t *testing.T) {
+	mock := &recordingMockLLM{response: "summary"}
+	a := &Agent{
+		config:  AgentConfig{Task: "test", LLM: mock, MaxSteps: 50},
+		actions: DefaultActions(),
+		history: makeHistory(4), // only 4 steps, all fit in window
+	}
+
+	a.summarizeIfNeeded(context.Background())
+
+	if len(mock.calls) != 0 {
+		t.Error("should not call LLM when all steps fit in window")
+	}
+	if a.contextSummary != "" {
+		t.Error("summary should remain empty")
+	}
+}
+
+func TestSummarizeIfNeeded_TriggeredWhenBatchReached(t *testing.T) {
+	mock := &recordingMockLLM{response: "Navigated to example.com and clicked search."}
+	a := &Agent{
+		config:  AgentConfig{Task: "test", LLM: mock, MaxSteps: 50},
+		actions: DefaultActions(),
+		history: makeHistory(8), // 3 steps outside the 5-step window
+	}
+
+	a.summarizeIfNeeded(context.Background())
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(mock.calls))
+	}
+	if a.contextSummary != "Navigated to example.com and clicked search." {
+		t.Errorf("summary = %q", a.contextSummary)
+	}
+	if a.summarizedUpTo != 3 {
+		t.Errorf("summarizedUpTo = %d, want 3", a.summarizedUpTo)
+	}
+	// Token tracking
+	if a.tokens.TotalTokens != 80 {
+		t.Errorf("tokens = %d, want 80", a.tokens.TotalTokens)
+	}
+}
+
+func TestSummarizeIfNeeded_IncrementalUpdate(t *testing.T) {
+	mock := &recordingMockLLM{response: "Updated: navigated, searched, and extracted data."}
+	a := &Agent{
+		config:         AgentConfig{Task: "test", LLM: mock, MaxSteps: 50},
+		actions:        DefaultActions(),
+		history:        makeHistory(11), // 6 outside window
+		contextSummary: "Previous: navigated to example.com.",
+		summarizedUpTo: 3, // already summarized first 3
+	}
+
+	a.summarizeIfNeeded(context.Background())
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(mock.calls))
+	}
+
+	// The prompt should include the previous summary
+	prompt := mock.calls[0][1].Content[0].Text // user message
+	if !strings.Contains(prompt, "Previous: navigated to example.com.") {
+		t.Error("prompt should include previous summary")
+	}
+	// Should include steps 4-6 (indices 3-5)
+	if !strings.Contains(prompt, "Step 4") {
+		t.Error("prompt should include new unsummarized steps")
+	}
+
+	if a.contextSummary != "Updated: navigated, searched, and extracted data." {
+		t.Errorf("summary = %q", a.contextSummary)
+	}
+	if a.summarizedUpTo != 6 {
+		t.Errorf("summarizedUpTo = %d, want 6", a.summarizedUpTo)
+	}
+}
+
+func TestSummarizeIfNeeded_DisabledByConfig(t *testing.T) {
+	mock := &recordingMockLLM{response: "summary"}
+	a := &Agent{
+		config:  AgentConfig{Task: "test", LLM: mock, MaxSteps: 50, DisableSummary: true},
+		actions: DefaultActions(),
+		history: makeHistory(10),
+	}
+
+	a.summarizeIfNeeded(context.Background())
+
+	if len(mock.calls) != 0 {
+		t.Error("should not call LLM when summarization is disabled")
+	}
+}
+
+func TestSummarizeIfNeeded_LLMErrorNonFatal(t *testing.T) {
+	mock := &recordingMockLLM{err: fmt.Errorf("API error")}
+	a := &Agent{
+		config:  AgentConfig{Task: "test", LLM: mock, MaxSteps: 50},
+		actions: DefaultActions(),
+		history: makeHistory(8),
+	}
+
+	// Should not panic or return error
+	a.summarizeIfNeeded(context.Background())
+
+	if a.contextSummary != "" {
+		t.Error("summary should remain empty on error")
+	}
+	if a.summarizedUpTo != 0 {
+		t.Error("summarizedUpTo should not advance on error")
+	}
+}
+
+func TestSummarizeIfNeeded_SkipsWhenBelowBatchThreshold(t *testing.T) {
+	mock := &recordingMockLLM{response: "summary"}
+	a := &Agent{
+		config:         AgentConfig{Task: "test", LLM: mock, MaxSteps: 50},
+		actions:        DefaultActions(),
+		history:        makeHistory(7), // 2 outside window, below batch size of 3
+		contextSummary: "existing summary",
+		summarizedUpTo: 1, // 1 already summarized, only 1 new unsummarized
+	}
+
+	a.summarizeIfNeeded(context.Background())
+
+	if len(mock.calls) != 0 {
+		t.Error("should not call LLM when unsummarized count is below batch threshold")
+	}
+}
+
+func TestBuildMessages_IncludesSummary(t *testing.T) {
+	a := &Agent{
+		config:         AgentConfig{Task: "test", LLM: &mockLLM{}, MaxSteps: 10},
+		actions:        DefaultActions(),
+		contextSummary: "Visited example.com, searched for Go, found 3 results.",
+	}
+
+	state := &DOMState{URL: "https://example.com", Title: "Example", Tree: "[0]<a>Link</a>"}
+	messages := a.buildMessages(state, 1)
+
+	systemMsg := messages[0].Content[0].Text
+	if !strings.Contains(systemMsg, "Context from Earlier Steps") {
+		t.Error("system prompt should contain summary header")
+	}
+	if !strings.Contains(systemMsg, "Visited example.com, searched for Go") {
+		t.Error("system prompt should contain the summary text")
+	}
+}
+
+func TestBuildMessages_NoSummaryWhenEmpty(t *testing.T) {
+	a := &Agent{
+		config:  AgentConfig{Task: "test", LLM: &mockLLM{}, MaxSteps: 10},
+		actions: DefaultActions(),
+	}
+
+	state := &DOMState{URL: "https://example.com", Title: "Example", Tree: "[0]<a>Link</a>"}
+	messages := a.buildMessages(state, 1)
+
+	systemMsg := messages[0].Content[0].Text
+	if strings.Contains(systemMsg, "Context from Earlier Steps") {
+		t.Error("system prompt should not contain summary header when no summary exists")
+	}
+}
+
+// makeHistory creates N fake step history entries for testing.
+func makeHistory(n int) []StepInfo {
+	history := make([]StepInfo, n)
+	actions := []string{"navigate", "click", "type", "scroll", "extract", "search"}
+	for i := range history {
+		history[i] = StepInfo{
+			Step:   i + 1,
+			Action: actions[i%len(actions)],
+			Result: fmt.Sprintf("Result of step %d", i+1),
+		}
+	}
+	return history
+}

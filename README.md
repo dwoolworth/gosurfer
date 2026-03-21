@@ -451,9 +451,10 @@ Each step:
 7. Repeat until `done` action or max steps
 
 The agent includes:
+- **Context summarization**: For long tasks, older steps are automatically summarized by the LLM into a running narrative, so the agent retains awareness of earlier actions, extracted data, and progress even beyond the 5-step recent history window. Enabled by default; disable with `DisableSummary: true`
 - **Loop detection**: Watches for repeating action patterns and nudges the LLM to try different approaches
 - **Auto tab switching**: Detects `target="_blank"` clicks and follows to the new tab
-- **Message compaction**: Only sends the last 5 steps to stay within context limits
+- **Message compaction**: Keeps the last 5 steps verbatim, with LLM-generated summaries of older steps injected into the system prompt
 - **Secret replacement**: `{{placeholder}}` in typed text is replaced with actual values (TOTP codes generated fresh)
 
 ### Built on Rod
