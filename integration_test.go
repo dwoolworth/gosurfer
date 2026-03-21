@@ -2,6 +2,7 @@ package gosurfer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +136,37 @@ func testServer() *httptest.Server {
       document.getElementById('status').textContent = 'dropped';
     });
   </script>
+</body></html>`)
+	})
+
+	mux.HandleFunc("/locator", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
+<html><head><title>Locator Test</title></head>
+<body>
+  <nav>
+    <a href="/home">Home</a>
+    <a href="/about">About Us</a>
+  </nav>
+  <main>
+    <h1>Welcome</h1>
+    <h2>Getting Started</h2>
+    <form>
+      <label for="email">Email Address</label>
+      <input type="email" id="email" placeholder="you@example.com" data-testid="email-input" />
+      <label for="pass">Password</label>
+      <input type="password" id="pass" placeholder="Enter password" />
+      <input type="checkbox" id="remember" />
+      <label for="remember">Remember me</label>
+      <button type="submit">Sign In</button>
+      <button type="button" disabled>Loading...</button>
+    </form>
+    <img src="/logo.png" alt="Company Logo" />
+    <p>Welcome to our <strong>testing</strong> page.</p>
+    <div aria-label="Search panel" role="search">
+      <input type="search" placeholder="Search..." aria-label="Search input" />
+    </div>
+  </main>
 </body></html>`)
 	})
 
@@ -2498,5 +2530,435 @@ func TestBrowser_NewPage_Navigate(t *testing.T) {
 	u := page.URL()
 	if !strings.Contains(u, ts.URL) {
 		t.Errorf("URL = %q", u)
+	}
+}
+
+// --- Semantic Locator Tests ---
+
+func TestGetByRole_Button(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByRole("button", Name("Sign In"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := el.Text()
+	if text != "Sign In" {
+		t.Errorf("text = %q", text)
+	}
+}
+
+func TestGetByRole_Link(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByRole("link", Name("About Us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	href, _ := el.Attribute("href")
+	if href != "/about" {
+		t.Errorf("href = %q", href)
+	}
+}
+
+func TestGetByRole_Heading(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByRole("heading", Name("Welcome"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := el.Text()
+	if text != "Welcome" {
+		t.Errorf("text = %q", text)
+	}
+}
+
+func TestGetByRole_Textbox(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	// Email input is type=email which maps to textbox
+	el, err := page.GetByRole("textbox", Name("Email Address"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := el.Attribute("id")
+	if id != "email" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestGetByRole_NotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	_, err := page.GetByRole("slider")
+	if err == nil {
+		t.Error("expected error for non-existent role")
+	}
+}
+
+func TestGetAllByRole(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	els, err := page.GetAllByRole("button")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(els) < 2 {
+		t.Errorf("expected at least 2 buttons, got %d", len(els))
+	}
+}
+
+func TestGetByText(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByText("Getting Started")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, _ := el.Attribute("id")
+	// h2 doesn't have an id, check tag via HTML
+	html, _ := el.HTML()
+	if !strings.Contains(html, "Getting Started") {
+		t.Errorf("html = %q", html)
+	}
+	_ = tag
+}
+
+func TestGetByText_Exact(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByText("Welcome", Exact())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := el.Text()
+	if text != "Welcome" {
+		t.Errorf("text = %q", text)
+	}
+}
+
+func TestGetByText_NotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	_, err := page.GetByText("nonexistent text xyz")
+	if err == nil {
+		t.Error("expected error for non-existent text")
+	}
+}
+
+func TestGetByLabel(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByLabel("Email Address")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := el.Attribute("id")
+	if id != "email" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestGetByLabel_AriaLabel(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByLabel("Search input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ph, _ := el.Attribute("placeholder")
+	if ph != "Search..." {
+		t.Errorf("placeholder = %q", ph)
+	}
+}
+
+func TestGetByPlaceholder(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByPlaceholder("you@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := el.Attribute("id")
+	if id != "email" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestGetByPlaceholder_Substring(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByPlaceholder("example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := el.Attribute("id")
+	if id != "email" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestGetByTestID(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByTestID("email-input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := el.Attribute("id")
+	if id != "email" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestGetByAltText(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByAltText("Company Logo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := el.Attribute("src")
+	if src != "/logo.png" {
+		t.Errorf("src = %q", src)
+	}
+}
+
+func TestGetByAltText_Substring(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByAltText("logo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := el.Attribute("src")
+	if src != "/logo.png" {
+		t.Errorf("src = %q", src)
+	}
+}
+
+// --- Expect API Tests ---
+
+func TestExpect_ToHaveTitle(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page)
+	if err := expect.ToHaveTitle("Locator Test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_ToHaveTitle_Fails(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page, WithTimeout(200*time.Millisecond))
+	err := expect.ToHaveTitle("Wrong Title")
+	if err == nil {
+		t.Error("expected error for wrong title")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("error should mention timeout: %v", err)
+	}
+}
+
+func TestExpect_ToHaveTitleContaining(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page)
+	if err := expect.ToHaveTitleContaining("Locator"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_ToHaveURL(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page)
+	if err := expect.ToHaveURL(ts.URL + "/locator"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_ToHaveURLContaining(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page)
+	if err := expect.ToHaveURLContaining("/locator"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToBeVisible(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	if err := expect.Locator("#submit-btn").ToBeVisible(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToBeHidden(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	if err := expect.Locator("#hidden").ToBeHidden(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToHaveText(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	if err := expect.Locator("h1").ToHaveText("Hello GoSurfer"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToContainText(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	if err := expect.Locator("h1").ToContainText("GoSurfer"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToHaveValue(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	_ = page.Type("#search", "hello")
+	expect := Expect(page)
+	if err := expect.Locator("#search").ToHaveValue("hello"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToHaveAttribute(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	if err := expect.Locator("#search").ToHaveAttribute("placeholder", "Search here..."); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToHaveCount(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	// 3 options in the select
+	if err := expect.Locator("#color-select option").ToHaveCount(3); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToBeEnabled(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page)
+	if err := expect.Locator("#email").ToBeEnabled(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToBeDisabled(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	expect := Expect(page)
+	if err := expect.Locator("button[disabled]").ToBeDisabled(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_Not_ToBeVisible(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	if err := expect.Locator("#hidden").Not().ToBeVisible(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- Auth State Save/Restore Tests ---
+
+func TestSaveAndLoadStorageState(t *testing.T) {
+	// Set up page with cookies and localStorage
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/storage")
+	_ = page.LocalStorageSet("user", "alice")
+	_ = page.LocalStorageSet("theme", "dark")
+	_ = page.SetCookie("session", "abc123", "", "/")
+
+	// Save state
+	tmpFile := t.TempDir() + "/state.json"
+	if err := page.SaveStorageState(tmpFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify file exists and is valid JSON
+	data, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state StorageState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.LocalStorage) < 2 {
+		t.Errorf("expected at least 2 localStorage entries, got %d", len(state.LocalStorage))
+	}
+	if state.LocalStorage["user"] != "alice" {
+		t.Errorf("user = %q", state.LocalStorage["user"])
+	}
+
+	// Create new page and restore state
+	page2 := newPage(t)
+	_ = page2.Navigate(ts.URL + "/storage")
+	if err := page2.LoadStorageState(tmpFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify localStorage was restored
+	val, err := page2.LocalStorageGet("user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "alice" {
+		t.Errorf("restored user = %q", val)
+	}
+	val, err = page2.LocalStorageGet("theme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != "dark" {
+		t.Errorf("restored theme = %q", val)
+	}
+}
+
+func TestGetStorageState(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/storage")
+	_ = page.LocalStorageSet("key1", "val1")
+
+	state, err := page.GetStorageState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Origin == "" {
+		t.Error("origin should not be empty")
+	}
+	if state.LocalStorage["key1"] != "val1" {
+		t.Errorf("localStorage key1 = %q", state.LocalStorage["key1"])
+	}
+}
+
+func TestLoadStorageState_FileNotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	err := page.LoadStorageState("/nonexistent/path.json")
+	if err == nil {
+		t.Error("expected error for missing file")
 	}
 }

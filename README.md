@@ -137,6 +137,83 @@ llm := gosurfer.NewOllama("llama3.1")
 llm := gosurfer.NewOpenAICompatible("https://api.together.xyz/v1", "key", "model")
 ```
 
+### Semantic Locators (Playwright-style)
+
+Find elements by their accessible role, text, label, or test ID — resilient to DOM changes:
+
+```go
+// By ARIA role + accessible name
+btn, _ := page.GetByRole("button", gosurfer.Name("Sign In"))
+link, _ := page.GetByRole("link", gosurfer.Name("About"))
+
+// By visible text
+el, _ := page.GetByText("Welcome back")
+el, _ = page.GetByText("Welcome", gosurfer.Exact()) // exact match
+
+// By form label (<label for="..."> or aria-label)
+input, _ := page.GetByLabel("Email Address")
+
+// By placeholder
+search, _ := page.GetByPlaceholder("Search...")
+
+// By data-testid
+form, _ := page.GetByTestID("login-form")
+
+// By alt text
+img, _ := page.GetByAltText("Company Logo")
+```
+
+### Auto-Retrying Assertions (Expect API)
+
+Playwright-inspired assertions that retry until they pass or timeout (default 5s). Eliminates flaky e2e tests:
+
+```go
+expect := gosurfer.Expect(page)
+
+// Page-level assertions
+expect.ToHaveTitle("Dashboard")
+expect.ToHaveURL("https://example.com/home")
+expect.ToHaveTitleContaining("Dash")
+expect.ToHaveURLContaining("/home")
+
+// Element assertions (auto-retry)
+expect.Locator("#status").ToBeVisible()
+expect.Locator("#status").ToHaveText("Ready")
+expect.Locator("#status").ToContainText("Read")
+expect.Locator("#search").ToHaveValue("query")
+expect.Locator("#search").ToHaveAttribute("placeholder", "Search...")
+expect.Locator("#btn").ToBeEnabled()
+expect.Locator("button[disabled]").ToBeDisabled()
+expect.Locator("#modal").ToBeHidden()
+expect.Locator("input[type=checkbox]").ToBeChecked()
+expect.Locator("li.item").ToHaveCount(5)
+
+// Negation
+expect.Locator("#modal").Not().ToBeVisible()
+
+// Custom timeout
+expect = gosurfer.Expect(page, gosurfer.WithTimeout(10*time.Second))
+```
+
+### Auth State Save/Restore
+
+Save login state (cookies + localStorage) to a JSON file and restore it across sessions — skip login in every test:
+
+```go
+// After logging in:
+page.SaveStorageState("auth.json")
+
+// In subsequent tests:
+page, _ := browser.NewPage()
+page.Navigate("https://example.com")
+page.LoadStorageState("auth.json")
+page.Reload() // now authenticated
+
+// Or capture/restore programmatically:
+state, _ := page.GetStorageState()
+page2.RestoreStorageState(state)
+```
+
 ### DOM Extraction for LLMs
 
 The key innovation from Browser Use, implemented in Go. `DOMState()` extracts the page into an indexed format that LLMs can reason about:
@@ -435,6 +512,9 @@ gosurfer
 ├── storage.go      Cookie + localStorage/sessionStorage management
 ├── drag.go         Drag and drop operations
 ├── har.go          HAR 1.2 network traffic recording
+├── locator.go      Semantic locators (GetByRole, GetByText, GetByLabel, etc.)
+├── expect.go       Auto-retrying Playwright-style assertions
+├── auth.go         Storage state save/restore for auth persistence
 ├── prompt.go       Agent system prompt generation
 └── cmd/gosurfer/   CLI entry point
 ```
@@ -492,7 +572,7 @@ docker run --rm gosurfer-bench
 
 ## Test Coverage
 
-76.6% statement coverage across 14 test files (4,820 lines of tests). Integration tests use a shared headless browser with an `httptest` server:
+76%+ statement coverage across 14 test files (5,500+ lines of tests). Integration tests use a shared headless browser with an `httptest` server:
 
 ```bash
 go test -timeout 180s ./...
