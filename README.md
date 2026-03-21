@@ -95,7 +95,7 @@ fmt.Printf("Success: %v\nOutput: %s\nSteps: %d\nTokens: %d\n",
     result.Success, result.Output, result.Steps, result.TotalTokens.TotalTokens)
 ```
 
-### 16 Built-in Agent Actions
+### 21 Built-in Agent Actions
 
 | Action | Description |
 |--------|-------------|
@@ -114,6 +114,11 @@ fmt.Printf("Success: %v\nOutput: %s\nSteps: %d\nTokens: %d\n",
 | `close_tab` | Close a tab |
 | `new_tab` | Open URL in new tab |
 | `upload_file` | Upload file to input |
+| `get_cookies` | Retrieve all cookies for current page |
+| `set_cookie` | Set a cookie (name, value, domain) |
+| `get_storage` | Read localStorage values |
+| `set_storage` | Write localStorage values |
+| `drag` | Drag element to another element or coordinates |
 | `done` | Signal task completion with result |
 
 ### LLM Providers
@@ -296,6 +301,57 @@ go func() {
 }()
 ```
 
+### Cookies and Storage
+
+Full cookie and localStorage/sessionStorage management:
+
+```go
+// Cookies
+cookies, _ := page.GetCookies()
+cookie, _ := page.GetCookie("session_id")
+page.SetCookie("token", "abc123", ".example.com", "/")
+page.DeleteCookies("token")
+page.ClearCookies()
+
+// localStorage
+page.LocalStorageSet("key", "value")
+val, _ := page.LocalStorageGet("key")
+page.LocalStorageDelete("key")
+page.LocalStorageClear()
+
+// sessionStorage
+page.SessionStorageSet("key", "value")
+val, _ = page.SessionStorageGet("key")
+```
+
+### Drag and Drop
+
+```go
+// Element-to-element drag
+source, _ := page.Element("#draggable")
+target, _ := page.Element("#droppable")
+source.DragTo(target)
+
+// Element to coordinates
+source.DragToCoordinates(300, 400)
+
+// Coordinate-based drag
+page.DragDrop(100, 200, 300, 400)
+```
+
+### HAR Recording
+
+Record network traffic in HAR 1.2 format for debugging or analysis:
+
+```go
+recorder, _ := page.StartHAR()
+page.Navigate("https://example.com")
+// ... interact with page ...
+
+data, _ := recorder.Export() // HAR 1.2 JSON bytes
+fmt.Printf("Captured %d requests\n", recorder.Entries())
+```
+
 ### Browser Context Isolation
 
 ```go
@@ -303,6 +359,33 @@ incognito, _ := browser.Incognito()
 defer incognito.Close()
 page, _ := incognito.NewPage() // isolated cookies, storage
 ```
+
+## CLI
+
+gosurfer includes an interactive command-line tool for browser automation:
+
+```bash
+# Install
+go install github.com/dwoolworth/gosurfer/cmd/gosurfer@latest
+
+# Single command
+gosurfer open https://example.com
+gosurfer screenshot page.png
+
+# Interactive REPL
+gosurfer
+gosurfer> open https://news.ycombinator.com
+gosurfer> state
+gosurfer> click "a.storylink"
+gosurfer> screenshot hn.png
+gosurfer> cookies
+gosurfer> har traffic.har
+gosurfer> close
+```
+
+Commands: `open`, `click`, `type`, `screenshot`, `pdf`, `state`, `eval`, `cookies`, `cookie`, `storage`, `har`, `text`, `html`, `back`, `forward`, `reload`, `tabs`, `close`.
+
+Set `GOSURFER_HEADLESS=false` to see the browser window, `GOSURFER_STEALTH=true` for anti-detection mode.
 
 ## Docker
 
@@ -343,13 +426,17 @@ gosurfer
 ├── element.go      Element handles, click/type/select, shadow DOM, iframes
 ├── dom.go          DOM extraction + LLM serialization (the key innovation)
 ├── agent.go        AI agent loop with CAPTCHA auto-solve, loop detection
-├── action.go       16 agent actions + custom action registry
+├── action.go       21 agent actions + custom action registry
 ├── llm.go          OpenAI, Anthropic, Ollama providers (raw net/http)
 ├── stealth.go      12-vector anti-detection (JS injection + Chrome flags)
 ├── captcha.go      Detection + solving (2Captcha, CapSolver, manual)
 ├── totp.go         RFC 6238 TOTP + secrets management
 ├── network.go      Request interception and blocking
-└── prompt.go       Agent system prompt generation
+├── storage.go      Cookie + localStorage/sessionStorage management
+├── drag.go         Drag and drop operations
+├── har.go          HAR 1.2 network traffic recording
+├── prompt.go       Agent system prompt generation
+└── cmd/gosurfer/   CLI entry point
 ```
 
 ### How the Agent Works
@@ -404,7 +491,7 @@ docker run --rm gosurfer-bench
 
 ## Test Coverage
 
-77.5% statement coverage across 10 test files (2,585 lines of tests). Integration tests use a shared headless browser with an `httptest` server:
+76.6% statement coverage across 14 test files (4,820 lines of tests). Integration tests use a shared headless browser with an `httptest` server:
 
 ```bash
 go test -timeout 180s ./...

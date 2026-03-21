@@ -1088,6 +1088,7 @@ func TestPage_PDF(t *testing.T) {
 func TestPage_KeyPress(t *testing.T) {
 	page := newPage(t)
 	_ = page.Navigate(ts.URL)
+	_ = page.WaitLoad()
 	// Focus on input first
 	el, _ := page.Element("#search")
 	_ = el.Focus()
