@@ -528,6 +528,28 @@ func TestSummarizeIfNeeded_SkipsWhenBelowBatchThreshold(t *testing.T) {
 	}
 }
 
+func TestSummarizeIfNeeded_UsesSummaryLLM(t *testing.T) {
+	mainLLM := &recordingMockLLM{response: "main response"}
+	summaryLLM := &recordingMockLLM{response: "Cheap summary from haiku."}
+	a := &Agent{
+		config:  AgentConfig{Task: "test", LLM: mainLLM, SummaryLLM: summaryLLM, MaxSteps: 50},
+		actions: DefaultActions(),
+		history: makeHistory(8),
+	}
+
+	a.summarizeIfNeeded(context.Background())
+
+	if len(mainLLM.calls) != 0 {
+		t.Error("main LLM should not be called for summarization when SummaryLLM is set")
+	}
+	if len(summaryLLM.calls) != 1 {
+		t.Fatalf("SummaryLLM should be called once, got %d", len(summaryLLM.calls))
+	}
+	if a.contextSummary != "Cheap summary from haiku." {
+		t.Errorf("summary = %q", a.contextSummary)
+	}
+}
+
 func TestBuildMessages_IncludesSummary(t *testing.T) {
 	a := &Agent{
 		config:         AgentConfig{Task: "test", LLM: &mockLLM{}, MaxSteps: 10},

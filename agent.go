@@ -60,6 +60,11 @@ type AgentConfig struct {
 	// When false (default), the agent summarizes older steps to maintain awareness
 	// of earlier context beyond the 5-step recent history window.
 	DisableSummary bool
+
+	// SummaryLLM is an optional cheaper/faster LLM used for context summarization.
+	// If nil, the main LLM is used. Useful for pairing an expensive reasoning model
+	// (e.g. Opus, GPT-4) with a cheaper summarizer (e.g. Haiku, GPT-4.1-mini).
+	SummaryLLM LLMProvider
 }
 
 // StepInfo provides information about a completed agent step.
@@ -428,7 +433,12 @@ func (a *Agent) summarizeIfNeeded(ctx context.Context) {
 		TextMessage("user", prompt),
 	}
 
-	resp, err := a.config.LLM.ChatCompletion(ctx, messages,
+	llm := a.config.LLM
+	if a.config.SummaryLLM != nil {
+		llm = a.config.SummaryLLM
+	}
+
+	resp, err := llm.ChatCompletion(ctx, messages,
 		WithMaxTokens(512),
 		WithTemperature(0.0),
 	)
