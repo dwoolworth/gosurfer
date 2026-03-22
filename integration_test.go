@@ -139,6 +139,30 @@ func testServer() *httptest.Server {
 </body></html>`)
 	})
 
+	mux.HandleFunc("/api/users", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"users":[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]}`)
+	})
+
+	mux.HandleFunc("/fetch-test", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
+<html><head><title>Fetch Test</title></head>
+<body>
+  <div id="result">loading</div>
+  <script>
+    fetch('/api/users')
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('result').textContent = JSON.stringify(data);
+      })
+      .catch(err => {
+        document.getElementById('result').textContent = 'error: ' + err.message;
+      });
+  </script>
+</body></html>`)
+	})
+
 	mux.HandleFunc("/locator", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
@@ -1165,7 +1189,7 @@ func TestBrowser_PageByURL(t *testing.T) {
 func TestPage_Intercept_BlockPatterns(t *testing.T) {
 	page := newPage(t)
 	interceptor := page.Intercept()
-	interceptor.BlockPatterns(`.*\.png$`)
+	interceptor.BlockPatterns(`*.png`)
 	interceptor.Start()
 	defer func() { _ = interceptor.Stop() }()
 
@@ -1180,7 +1204,7 @@ func TestPage_Intercept_OnRequest(t *testing.T) {
 	page := newPage(t)
 	intercepted := make(chan string, 10)
 	interceptor := page.Intercept()
-	interceptor.OnRequest(".*", func(req *InterceptedRequest) {
+	interceptor.OnRequest("*", func(req *InterceptedRequest) {
 		intercepted <- req.URL()
 		_ = req.Method()
 		_ = req.Header("Accept")
@@ -1939,7 +1963,7 @@ func TestPage_Intercept_OnRequest_AllMethods(t *testing.T) {
 
 	var capturedURL, capturedMethod, capturedHeader, capturedBody string
 	interceptor := page.Intercept()
-	interceptor.OnRequest(".*", func(req *InterceptedRequest) {
+	interceptor.OnRequest("*", func(req *InterceptedRequest) {
 		capturedURL = req.URL()
 		capturedMethod = req.Method()
 		capturedHeader = req.Header("Accept")
@@ -2960,5 +2984,105 @@ func TestLoadStorageState_FileNotFound(t *testing.T) {
 	err := page.LoadStorageState("/nonexistent/path.json")
 	if err == nil {
 		t.Error("expected error for missing file")
+	}
+}
+
+// --- Network Mocking Tests ---
+
+func TestMockJSON(t *testing.T) {
+	page := newPage(t)
+	interceptor := page.Intercept()
+	interceptor.MockJSON(`*/api/users*`, 200, map[string]interface{}{
+		"users": []map[string]interface{}{
+			{"id": 99, "name": "Mocked User"},
+		},
+	})
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+
+	val, err := page.Eval(`() => document.getElementById('result').textContent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := val.(string)
+	if !strings.Contains(text, "Mocked User") {
+		t.Errorf("expected mocked response, got %q", text)
+	}
+	if strings.Contains(text, "Alice") {
+		t.Error("should not contain real response data")
+	}
+}
+
+func TestMockText(t *testing.T) {
+	page := newPage(t)
+	interceptor := page.Intercept()
+	interceptor.MockText(`*/api/users*`, 200, `{"custom":"response"}`, "Content-Type", "application/json")
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+
+	val, err := page.Eval(`() => document.getElementById('result').textContent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := val.(string)
+	if !strings.Contains(text, "custom") {
+		t.Errorf("expected mocked text response, got %q", text)
+	}
+}
+
+func TestInterceptedRequest_RespondJSON(t *testing.T) {
+	page := newPage(t)
+	interceptor := page.Intercept()
+	interceptor.OnRequest(`*/api/users*`, func(req *InterceptedRequest) {
+		if req.Method() != "GET" {
+			t.Errorf("expected GET, got %s", req.Method())
+		}
+		if !strings.Contains(req.URL(), "/api/users") {
+			t.Errorf("URL = %q", req.URL())
+		}
+		req.RespondJSON(201, map[string]interface{}{"created": true})
+	})
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+
+	val, err := page.Eval(`() => document.getElementById('result').textContent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := val.(string)
+	if !strings.Contains(text, "created") {
+		t.Errorf("expected RespondJSON data, got %q", text)
+	}
+}
+
+func TestInterceptedRequest_Respond_WithStatus(t *testing.T) {
+	page := newPage(t)
+	interceptor := page.Intercept()
+	interceptor.OnRequest(`*/api/users*`, func(req *InterceptedRequest) {
+		req.Respond(404, `{"error":"not found"}`, "Content-Type", "application/json")
+	})
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+
+	val, err := page.Eval(`() => document.getElementById('result').textContent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := val.(string)
+	// fetch will reject or the JSON won't parse as expected
+	if strings.Contains(text, "Alice") {
+		t.Error("should not contain real response data")
 	}
 }

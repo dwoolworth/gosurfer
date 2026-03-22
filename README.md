@@ -348,14 +348,41 @@ for _, tab := range state.Tabs {
 
 New tabs opened by `target="_blank"` links are auto-detected and switched to.
 
-### Network Interception
+### Network Interception and Mocking
+
+Mock API responses without hitting real servers — test your frontend against any backend scenario:
 
 ```go
 interceptor := page.Intercept()
-interceptor.OnRequest(`.*analytics.*`, func(req *gosurfer.InterceptedRequest) {
-    req.Abort() // block analytics
+
+// Mock a JSON API endpoint
+interceptor.MockJSON(`*/api/users*`, 200, map[string]any{
+    "users": []map[string]any{{"id": 1, "name": "Alice"}},
 })
-interceptor.BlockPatterns(`.*\.ads\..*`, `.*tracker.*`)
+
+// Mock with custom status and headers
+interceptor.MockText(`*/api/health*`, 503, `{"status":"down"}`,
+    "Content-Type", "application/json")
+
+// Full control: inspect request, return custom response
+interceptor.OnRequest(`*/api/data*`, func(req *gosurfer.InterceptedRequest) {
+    if req.Method() == "POST" {
+        req.RespondJSON(201, map[string]any{"created": true})
+    } else {
+        req.Continue() // let GET requests through
+    }
+})
+
+// Modify real responses (fetch then alter)
+interceptor.OnRequest(`*/api/config*`, func(req *gosurfer.InterceptedRequest) {
+    _ = req.LoadResponse()              // fetch real response
+    body := req.ResponseBody()          // read it
+    req.SetResponseBody(body + "extra") // modify it
+})
+
+// Block unwanted requests
+interceptor.BlockPatterns(`*.ads.*`, `*tracker*`, `*analytics*`)
+
 interceptor.Start()
 defer interceptor.Stop()
 ```
