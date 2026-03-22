@@ -326,23 +326,24 @@ func (p *Page) GetByPlaceholder(text string, opts ...LocatorOption) (*Element, e
 		opt(cfg)
 	}
 
+	jsExact := "false"
 	if cfg.exact {
-		el, err := p.rod.Element(fmt.Sprintf("[placeholder=%q]", text))
-		if err != nil {
-			return nil, fmt.Errorf("gosurfer: no element found with placeholder %q", text)
-		}
-		return &Element{rod: el}, nil
+		jsExact = "true"
 	}
 
 	rodElements, err := p.rod.ElementsByJS(rod.Eval(
-		`(text) => {
+		`(text, exact) => {
 			const lower = text.toLowerCase();
 			const results = [];
 			for (const el of document.querySelectorAll('[placeholder]')) {
-				if (el.placeholder.toLowerCase().includes(lower)) results.push(el);
+				if (exact === 'true') {
+					if (el.placeholder === text) results.push(el);
+				} else {
+					if (el.placeholder.toLowerCase().includes(lower)) results.push(el);
+				}
 			}
 			return results;
-		}`, text))
+		}`, text, jsExact))
 	if err != nil {
 		return nil, fmt.Errorf("gosurfer: get by placeholder: %w", err)
 	}
@@ -354,11 +355,15 @@ func (p *Page) GetByPlaceholder(text string, opts ...LocatorOption) (*Element, e
 
 // GetByTestID finds the first element with a matching data-testid attribute.
 func (p *Page) GetByTestID(id string) (*Element, error) {
-	el, err := p.rod.Element(fmt.Sprintf("[data-testid=%q]", id))
+	rodElements, err := p.rod.ElementsByJS(rod.Eval(
+		`(id) => Array.from(document.querySelectorAll('[data-testid="' + id + '"]'))`, id))
 	if err != nil {
+		return nil, fmt.Errorf("gosurfer: get by test ID: %w", err)
+	}
+	if len(rodElements) == 0 {
 		return nil, fmt.Errorf("gosurfer: no element found with test ID %q", id)
 	}
-	return &Element{rod: el}, nil
+	return &Element{rod: rodElements[0]}, nil
 }
 
 // GetByAltText finds the first element with a matching alt attribute.
@@ -368,23 +373,24 @@ func (p *Page) GetByAltText(text string, opts ...LocatorOption) (*Element, error
 		opt(cfg)
 	}
 
+	jsExact := "false"
 	if cfg.exact {
-		el, err := p.rod.Element(fmt.Sprintf("[alt=%q]", text))
-		if err != nil {
-			return nil, fmt.Errorf("gosurfer: no element found with alt text %q", text)
-		}
-		return &Element{rod: el}, nil
+		jsExact = "true"
 	}
 
 	rodElements, err := p.rod.ElementsByJS(rod.Eval(
-		`(text) => {
+		`(text, exact) => {
 			const lower = text.toLowerCase();
 			const results = [];
 			for (const el of document.querySelectorAll('[alt]')) {
-				if (el.alt.toLowerCase().includes(lower)) results.push(el);
+				if (exact === 'true') {
+					if (el.alt === text) results.push(el);
+				} else {
+					if (el.alt.toLowerCase().includes(lower)) results.push(el);
+				}
 			}
 			return results;
-		}`, text))
+		}`, text, jsExact))
 	if err != nil {
 		return nil, fmt.Errorf("gosurfer: get by alt text: %w", err)
 	}

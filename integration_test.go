@@ -3314,3 +3314,295 @@ func TestSetNetworkConditions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// --- Additional Coverage Tests ---
+
+// Locator: GetAllByText, exact paths, accessible name fallbacks
+
+func TestGetAllByText(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	els, err := page.GetAllByText("Sign In")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(els) == 0 {
+		t.Error("expected at least 1 element")
+	}
+}
+
+func TestGetByPlaceholder_Exact(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByPlaceholder("you@example.com", Exact())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := el.Attribute("id")
+	if id != "email" {
+		t.Errorf("id = %q", id)
+	}
+}
+
+func TestGetByPlaceholder_Exact_NotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	_, err := page.GetByPlaceholder("nonexistent_placeholder_xyz", Exact())
+	if err == nil {
+		t.Error("expected error for non-existent placeholder")
+	}
+}
+
+func TestGetByAltText_Exact(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	el, err := page.GetByAltText("Company Logo", Exact())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := el.Attribute("src")
+	if src != "/logo.png" {
+		t.Errorf("src = %q", src)
+	}
+}
+
+func TestGetByAltText_Exact_NotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	_, err := page.GetByAltText("nonexistent_alt_xyz", Exact())
+	if err == nil {
+		t.Error("expected error for non-existent alt text")
+	}
+}
+
+func TestGetByTestID_NotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	_, err := page.GetByTestID("nonexistent_test_id_xyz")
+	if err == nil {
+		t.Error("expected error for non-existent test ID")
+	}
+}
+
+func TestGetByLabel_NotFound(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	_, err := page.GetByLabel("nonexistent_label_xyz")
+	if err == nil {
+		t.Error("expected error for non-existent label")
+	}
+}
+
+func TestGetByRole_ExactName(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	// "Sign In" exact should match, "Sign" exact should NOT
+	_, err := page.GetByRole("button", Name("Sign"), Exact())
+	if err == nil {
+		t.Error("exact name 'Sign' should not match 'Sign In'")
+	}
+	el, err := page.GetByRole("button", Name("Sign In"), Exact())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := el.Text()
+	if text != "Sign In" {
+		t.Errorf("text = %q", text)
+	}
+}
+
+// Expect: ToBeChecked, negation retry path, timeout failure paths
+
+func TestExpect_Locator_ToBeChecked(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+	// Check the checkbox via JS
+	_, _ = page.Eval(`() => document.getElementById('remember').checked = true`)
+	expect := Expect(page)
+	if err := expect.Locator("#remember").ToBeChecked(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_Not_ToBeHidden(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page)
+	// #submit-btn is visible, so Not().ToBeHidden() should pass
+	if err := expect.Locator("#submit-btn").Not().ToBeHidden(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpect_Locator_ToContainText_Fails(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page, WithTimeout(200*time.Millisecond))
+	err := expect.Locator("h1").ToContainText("Nonexistent Text XYZ")
+	if err == nil {
+		t.Error("expected timeout error")
+	}
+}
+
+func TestExpect_Locator_ToHaveCount_Fails(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	expect := Expect(page, WithTimeout(200*time.Millisecond))
+	err := expect.Locator("#color-select option").ToHaveCount(999)
+	if err == nil {
+		t.Error("expected timeout error for wrong count")
+	}
+}
+
+// Network: BlockPatterns, Abort, Continue, Header, Body, LoadResponse
+
+func TestBlockPatterns_Integration(t *testing.T) {
+	page := newPage(t)
+	interceptor := page.Intercept()
+	interceptor.BlockPatterns(`*.png`)
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+	_ = page.Navigate(ts.URL)
+	// Just verify it doesn't crash — blocking .png on a page without images is fine
+}
+
+func TestInterceptedRequest_Abort(t *testing.T) {
+	page := newPage(t)
+	aborted := false
+	interceptor := page.Intercept()
+	interceptor.OnRequest("*/api/users*", func(req *InterceptedRequest) {
+		aborted = true
+		req.Abort()
+	})
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+	if !aborted {
+		t.Error("expected abort handler to be called")
+	}
+}
+
+func TestInterceptedRequest_Continue(t *testing.T) {
+	page := newPage(t)
+	continued := false
+	interceptor := page.Intercept()
+	interceptor.OnRequest("*/api/users*", func(req *InterceptedRequest) {
+		continued = true
+		_ = req.Header("Accept") // exercise Header()
+		_ = req.Body()           // exercise Body()
+		req.Continue()
+	})
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+	if !continued {
+		t.Error("expected continue handler to be called")
+	}
+	// Verify real data came through
+	val, _ := page.Eval(`() => document.getElementById('result').textContent`)
+	text, _ := val.(string)
+	if !strings.Contains(text, "Alice") {
+		t.Errorf("expected real data after Continue, got %q", text)
+	}
+}
+
+func TestInterceptedRequest_LoadResponse(t *testing.T) {
+	page := newPage(t)
+	var status int
+	var body string
+	interceptor := page.Intercept()
+	interceptor.OnRequest("*/api/users*", func(req *InterceptedRequest) {
+		if err := req.LoadResponse(); err != nil {
+			return
+		}
+		status = req.ResponseStatus()
+		body = req.ResponseBody()
+		// Modify the response
+		req.SetResponseBody(`{"users":[{"id":99,"name":"Modified"}]}`)
+		req.SetResponseHeader("X-Modified", "true")
+	})
+	interceptor.Start()
+	defer func() { _ = interceptor.Stop() }()
+
+	_ = page.Navigate(ts.URL + "/fetch-test")
+	time.Sleep(500 * time.Millisecond)
+
+	if status != 200 {
+		t.Errorf("response status = %d, want 200", status)
+	}
+	if !strings.Contains(body, "Alice") {
+		t.Errorf("original body should contain Alice, got %q", body)
+	}
+	// Verify modified response reached the page
+	val, _ := page.Eval(`() => document.getElementById('result').textContent`)
+	text, _ := val.(string)
+	if !strings.Contains(text, "Modified") {
+		t.Errorf("expected modified data, got %q", text)
+	}
+}
+
+// Emulation: ColorSchemeNoPreference, ReducedMotionNoPreference, EmulateDevice error paths
+
+func TestSetColorScheme_NoPreference(t *testing.T) {
+	page := newPage(t)
+	// Set dark first, then reset
+	_ = page.SetColorScheme(ColorSchemeDark)
+	if err := page.SetColorScheme(ColorSchemeNoPreference); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetReducedMotion_NoPreference(t *testing.T) {
+	page := newPage(t)
+	_ = page.SetReducedMotion(ReducedMotionReduce)
+	if err := page.SetReducedMotion(ReducedMotionNoPreference); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEmulateDevice_Mobile(t *testing.T) {
+	page := newPage(t)
+	if err := page.EmulateDevice(DeviceIPhoneX); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => navigator.userAgent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ua, _ := val.(string)
+	if !strings.Contains(ua, "iPhone") {
+		t.Errorf("user agent = %q, should contain iPhone", ua)
+	}
+}
+
+// Auth: RestoreStorageState with empty state, SaveStorageState error path
+
+func TestRestoreStorageState_Empty(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/storage")
+	err := page.RestoreStorageState(&StorageState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSaveStorageState_WritesToFile(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/storage")
+	tmpFile := t.TempDir() + "/test_state.json"
+	if err := page.SaveStorageState(tmpFile); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() == 0 {
+		t.Error("state file should not be empty")
+	}
+}
