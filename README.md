@@ -1,6 +1,6 @@
 # gosurfer
 
-AI-powered browser automation in pure Go. The Go equivalent of Python's [Browser Use](https://github.com/browser-use/browser-use) — wraps headless Chrome via the Chrome DevTools Protocol with an intelligent agent that autonomously browses the web.
+AI-powered browser automation and e2e testing in pure Go. Combines the AI agent of [Browser Use](https://github.com/browser-use/browser-use) with the testing ergonomics of [Playwright](https://playwright.dev) — semantic locators, auto-retrying assertions, network mocking, device emulation, and auth state persistence. All via the Chrome DevTools Protocol.
 
 No Python. No Node.js. One static binary.
 
@@ -16,13 +16,19 @@ fmt.Println(result.Output)
 ```
 
 ```go
-// Or use it as a direct browser automation library
-browser, _ := gosurfer.NewBrowser(gosurfer.BrowserConfig{Headless: true, Stealth: true})
+// Or use it for e2e testing with Playwright-style locators and assertions
+browser, _ := gosurfer.NewBrowser(gosurfer.BrowserConfig{Headless: true})
 page, _ := browser.NewPage()
 page.Navigate("https://example.com")
-page.Type("#search", "query")
-page.Click("#submit")
-state, _ := page.DOMState() // indexed DOM optimized for LLMs
+
+// Semantic locators — resilient to DOM changes
+page.GetByLabel("Email").Type("user@test.com")
+page.GetByRole("button", gosurfer.Name("Sign In")).Click()
+
+// Auto-retrying assertions — no flaky tests
+expect := gosurfer.Expect(page)
+expect.ToHaveURL("/dashboard")
+expect.Locator("h1").ToHaveText("Welcome back")
 ```
 
 ## Why gosurfer?
@@ -35,6 +41,11 @@ state, _ := page.DOMState() // indexed DOM optimized for LLMs
 | Idle memory | **~530 MB** | ~800+ MB | ~700+ MB |
 | Peak memory | **~1.1 GB** | ~2+ GB | ~1.5+ GB |
 | LLM agent | Yes | Yes | No (separate layer) |
+| Semantic locators | Yes (GetByRole, etc.) | No | Yes |
+| Auto-retry assertions | Yes (Expect API) | No | Yes |
+| Network mocking | Yes (MockJSON, etc.) | No | Yes |
+| Device emulation | Yes (7 presets) | No | Yes |
+| Auth state persist | Yes | No | Yes |
 | CAPTCHA solving | Yes | Yes (cloud) | No |
 | Stealth mode | Yes (12 vectors) | Yes (cloud + local) | No |
 | TOTP 2FA | Yes | Yes | No |
@@ -62,7 +73,7 @@ Go itself uses **0.6-16 MB heap**. Chrome dominates, as it does in every browser
 ## Installation
 
 ```bash
-go get github.com/dwoolworth/gosurfer
+go get github.com/dwoolworth/gosurfer@v0.2.0
 ```
 
 Requires Chrome or Chromium. On first run, [rod](https://github.com/go-rod/rod) auto-downloads a compatible Chromium if none is found.
@@ -567,7 +578,7 @@ gosurfer
 ├── stealth.go      12-vector anti-detection (JS injection + Chrome flags)
 ├── captcha.go      Detection + solving (2Captcha, CapSolver, manual)
 ├── totp.go         RFC 6238 TOTP + secrets management
-├── network.go      Request interception and blocking
+├── network.go      Request interception, blocking, and API mocking
 ├── storage.go      Cookie + localStorage/sessionStorage management
 ├── drag.go         Drag and drop operations
 ├── har.go          HAR 1.2 network traffic recording
@@ -632,7 +643,7 @@ docker run --rm gosurfer-bench
 
 ## Test Coverage
 
-76%+ statement coverage across 14 test files (5,500+ lines of tests). Integration tests use a shared headless browser with an `httptest` server:
+76%+ statement coverage across 14 test files (6,100+ lines of tests). Integration tests use a shared headless browser with an `httptest` server:
 
 ```bash
 go test -timeout 180s ./...
