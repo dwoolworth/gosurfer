@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="gosurfer-logo.png" alt="gosurfer logo" width="200" />
+</p>
+
 # gosurfer
 
 AI-powered browser automation and e2e testing in pure Go. Combines the AI agent of [Browser Use](https://github.com/browser-use/browser-use) with the testing ergonomics of [Playwright](https://playwright.dev) — semantic locators, auto-retrying assertions, network mocking, device emulation, and auth state persistence. All via the Chrome DevTools Protocol.
