@@ -387,6 +387,38 @@ interceptor.Start()
 defer interceptor.Stop()
 ```
 
+### Device and Environment Emulation
+
+Emulate mobile devices, geolocation, timezones, network conditions, and more:
+
+```go
+// One-liner device emulation with presets
+page.EmulateDevice(gosurfer.DeviceIPhoneX)
+page.EmulateDevice(gosurfer.DevicePixel7)
+page.EmulateDevice(gosurfer.DeviceIPadPro)
+page.EmulateDevice(gosurfer.DeviceDesktop1080p)
+
+// Or configure individually
+page.SetViewport(1440, 900, 2.0, false)
+page.SetUserAgent("Custom/Agent")
+page.SetGeolocation(37.7749, -122.4194, 100)  // San Francisco
+page.SetTimezone("Asia/Tokyo")
+page.SetLocale("ja_JP")
+
+// Network conditions
+page.SetOffline(true)                           // simulate offline
+page.SetNetworkConditions(150, 1.6*1024*1024, 750*1024) // 3G throttle
+
+// Media features
+page.SetColorScheme(gosurfer.ColorSchemeDark)
+page.SetReducedMotion(gosurfer.ReducedMotionReduce)
+page.SetTouchEnabled(true)
+
+// Permissions
+browser.GrantPermissions("https://example.com", "geolocation", "notifications")
+browser.ResetPermissions()
+```
+
 ### Dialog Handling
 
 JavaScript `alert()`, `confirm()`, and `prompt()` dialogs are auto-dismissed by the agent. For manual control:
@@ -542,6 +574,7 @@ gosurfer
 ├── locator.go      Semantic locators (GetByRole, GetByText, GetByLabel, etc.)
 ├── expect.go       Auto-retrying Playwright-style assertions
 ├── auth.go         Storage state save/restore for auth persistence
+├── emulation.go    Device, viewport, geolocation, timezone, network emulation
 ├── prompt.go       Agent system prompt generation
 └── cmd/gosurfer/   CLI entry point
 ```

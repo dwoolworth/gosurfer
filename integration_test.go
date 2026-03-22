@@ -3086,3 +3086,231 @@ func TestInterceptedRequest_Respond_WithStatus(t *testing.T) {
 		t.Error("should not contain real response data")
 	}
 }
+
+// --- Device Emulation Tests ---
+
+func TestSetViewport(t *testing.T) {
+	page := newPage(t)
+	// Use non-mobile mode so innerWidth matches the override directly
+	if err := page.SetViewport(800, 600, 1.0, false); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => window.innerWidth`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, _ := val.(float64)
+	if int(w) != 800 {
+		t.Errorf("viewport width = %v, want 800", w)
+	}
+}
+
+func TestSetUserAgent(t *testing.T) {
+	page := newPage(t)
+	if err := page.SetUserAgent("GoSurfer/Test"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => navigator.userAgent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ua, _ := val.(string)
+	if ua != "GoSurfer/Test" {
+		t.Errorf("user agent = %q", ua)
+	}
+}
+
+func TestSetGeolocation(t *testing.T) {
+	page := newPage(t)
+	// Grant permission first
+	if err := testBrowser.GrantPermissions("", "geolocation"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = testBrowser.ResetPermissions() }()
+
+	if err := page.SetGeolocation(37.7749, -122.4194, 100); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+
+	val, err := page.Eval(`() => new Promise((resolve, reject) => {
+		navigator.geolocation.getCurrentPosition(
+			pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+			err => reject(err.message),
+			{ timeout: 5000 }
+		)
+	})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := val.(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected type %T", val)
+	}
+	lat, _ := m["lat"].(float64)
+	if lat < 37.7 || lat > 37.8 {
+		t.Errorf("latitude = %v, expected ~37.77", lat)
+	}
+}
+
+func TestClearGeolocation(t *testing.T) {
+	page := newPage(t)
+	_ = page.SetGeolocation(0, 0, 100)
+	if err := page.ClearGeolocation(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetTimezone(t *testing.T) {
+	page := newPage(t)
+	if err := page.SetTimezone("Asia/Tokyo"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => Intl.DateTimeFormat().resolvedOptions().timeZone`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tz, _ := val.(string)
+	if tz != "Asia/Tokyo" {
+		t.Errorf("timezone = %q", tz)
+	}
+}
+
+func TestSetLocale(t *testing.T) {
+	page := newPage(t)
+	if err := page.SetLocale("fr_FR"); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	// SetLocale affects Intl APIs, not navigator.language
+	val, err := page.Eval(`() => new Intl.NumberFormat().format(1234.5)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted, _ := val.(string)
+	// French formatting uses space as thousands separator and comma as decimal
+	// e.g., "1 234,5" (narrow no-break space) or similar
+	if !strings.Contains(formatted, ",") {
+		t.Errorf("formatted number = %q, expected French formatting with comma decimal", formatted)
+	}
+}
+
+func TestSetOffline(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+	if err := page.SetOffline(true); err != nil {
+		t.Fatal(err)
+	}
+	val, err := page.Eval(`() => navigator.onLine`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	online, _ := val.(bool)
+	if online {
+		t.Error("expected navigator.onLine to be false")
+	}
+	// Re-enable
+	if err := page.SetOffline(false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetTouchEnabled(t *testing.T) {
+	page := newPage(t)
+	if err := page.SetTouchEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => 'ontouchstart' in window || navigator.maxTouchPoints > 0`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	touch, _ := val.(bool)
+	if !touch {
+		t.Error("expected touch events to be enabled")
+	}
+}
+
+func TestSetColorScheme(t *testing.T) {
+	page := newPage(t)
+	if err := page.SetColorScheme(ColorSchemeDark); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => window.matchMedia('(prefers-color-scheme: dark)').matches`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dark, _ := val.(bool)
+	if !dark {
+		t.Error("expected dark color scheme")
+	}
+}
+
+func TestSetReducedMotion(t *testing.T) {
+	page := newPage(t)
+	if err := page.SetReducedMotion(ReducedMotionReduce); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+	val, err := page.Eval(`() => window.matchMedia('(prefers-reduced-motion: reduce)').matches`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reduced, _ := val.(bool)
+	if !reduced {
+		t.Error("expected reduced motion")
+	}
+}
+
+func TestEmulateDevice(t *testing.T) {
+	page := newPage(t)
+	if err := page.EmulateDevice(DeviceDesktop1080p); err != nil {
+		t.Fatal(err)
+	}
+	_ = page.Navigate(ts.URL)
+
+	val, err := page.Eval(`() => ({
+		w: window.innerWidth,
+		ua: navigator.userAgent,
+	})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := val.(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected type %T", val)
+	}
+	w, _ := m["w"].(float64)
+	if int(w) != 1920 {
+		t.Errorf("viewport width = %v, want 1920", w)
+	}
+	ua, _ := m["ua"].(string)
+	if !strings.Contains(ua, "Windows") {
+		t.Errorf("user agent = %q, should contain Windows", ua)
+	}
+}
+
+func TestGrantAndResetPermissions(t *testing.T) {
+	if err := testBrowser.GrantPermissions("", "geolocation", "notifications"); err != nil {
+		t.Fatal(err)
+	}
+	if err := testBrowser.ResetPermissions(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetNetworkConditions(t *testing.T) {
+	page := newPage(t)
+	// Simulate slow network
+	if err := page.SetNetworkConditions(500, 50*1024, 20*1024); err != nil {
+		t.Fatal(err)
+	}
+	// Reset to no throttling
+	if err := page.SetNetworkConditions(0, -1, -1); err != nil {
+		t.Fatal(err)
+	}
+}
