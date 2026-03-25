@@ -203,6 +203,45 @@ var serializableAttrs = []string{
 	"multiple", "accept", "autocomplete", "selected",
 }
 
+// GetFocusedState extracts the DOM state with boilerplate stripped.
+// Removes navigation, footers, cookie banners, ad containers, and low-value
+// links (terms, privacy, copyright, same-page anchors, social media).
+// Focuses on <main>, <article>, [role="main"] content regions.
+func (d *DOMService) GetFocusedState() (*DOMState, error) {
+	result, err := d.page.rod.Eval(focusedDOMExtractionScript)
+	if err != nil {
+		return nil, fmt.Errorf("gosurfer: focused dom extraction: %w", err)
+	}
+
+	var extracted extractedDOM
+	if err := result.Value.Unmarshal(&extracted); err != nil {
+		return nil, fmt.Errorf("gosurfer: parse focused dom: %w", err)
+	}
+
+	elements := make(map[int]*DOMElement, len(extracted.Elements))
+	for i := range extracted.Elements {
+		el := &extracted.Elements[i]
+		elements[el.Index] = el
+	}
+
+	state := &DOMState{
+		URL:            extracted.URL,
+		Title:          extracted.Title,
+		Elements:       elements,
+		ScrollPosition: extracted.ScrollPosition,
+		PageHeight:     extracted.PageHeight,
+		ViewportHeight: extracted.ViewportHeight,
+	}
+
+	if d.page.browser != nil {
+		state.Tabs = d.getTabInfo()
+	}
+
+	state.Tree = d.serialize(extracted.Nodes, elements)
+	d.lastState = state
+	return state, nil
+}
+
 func truncate(s string, maxLen int) string {
 	s = strings.TrimSpace(s)
 	// Collapse whitespace
@@ -422,6 +461,297 @@ const domExtractionScript = `() => {
 	}
 
 	walk(document.body, 0, 50);
+
+	const scrollTop = document.documentElement.scrollTop || document.body.scrollTop;
+	const scrollHeight = document.documentElement.scrollHeight;
+	const viewportHeight = window.innerHeight;
+	const scrollPosition = scrollHeight > viewportHeight
+		? (scrollTop / (scrollHeight - viewportHeight)) * 100
+		: 0;
+
+	return {
+		url: location.href,
+		title: document.title,
+		elements: elements,
+		nodes: nodes,
+		scrollPosition: Math.round(scrollPosition),
+		pageHeight: scrollHeight,
+		viewportHeight: viewportHeight
+	};
+}`
+
+// focusedDOMExtractionScript is a variant that strips boilerplate regions and
+// low-value links before extraction, dramatically reducing token usage.
+const focusedDOMExtractionScript = `() => {
+	const INTERACTIVE_TAGS = new Set([
+		'a', 'button', 'input', 'select', 'textarea', 'details', 'summary'
+	]);
+
+	const INTERACTIVE_ROLES = new Set([
+		'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox',
+		'listbox', 'menu', 'menuitem', 'option', 'searchbox', 'slider',
+		'spinbutton', 'switch', 'tab', 'treeitem'
+	]);
+
+	const SKIP_TAGS = new Set([
+		'script', 'style', 'noscript', 'meta', 'link', 'head', 'br', 'hr'
+	]);
+
+	// Tags whose entire subtree is boilerplate
+	const BOILERPLATE_TAGS = new Set(['nav', 'footer', 'aside']);
+
+	// Roles whose entire subtree is boilerplate
+	const BOILERPLATE_ROLES = new Set([
+		'banner', 'contentinfo', 'complementary', 'navigation'
+	]);
+
+	// Classes/IDs that indicate boilerplate containers
+	const BOILERPLATE_PATTERNS = /cookie|consent|gdpr|banner|newsletter|popup|modal|overlay|sidebar|widget|ad-|ads-|advert|social|share|follow/i;
+
+	// Href patterns for low-value links
+	const JUNK_HREF_PATTERNS = [
+		/terms/i, /privacy/i, /cookie/i, /legal/i, /copyright/i,
+		/disclaimer/i, /gdpr/i, /\/tos\b/i, /policy/i, /sitemap/i,
+		/accessibility/i, /contact-us/i,
+		/facebook\.com/i, /twitter\.com/i, /x\.com\/(?!.*\/status)/i,
+		/instagram\.com/i, /linkedin\.com/i, /youtube\.com/i,
+		/tiktok\.com/i, /pinterest\.com/i, /reddit\.com/i,
+		/^mailto:/i, /^tel:/i, /^javascript:/i,
+		/^#$/  // bare hash (same-page anchor with no target)
+	];
+
+	const ATTR_LIST = [
+		'type', 'name', 'placeholder', 'value', 'href', 'role',
+		'aria-label', 'aria-expanded', 'aria-checked', 'title',
+		'alt', 'id', 'data-testid', 'checked', 'disabled',
+		'contenteditable', 'min', 'max', 'pattern', 'required',
+		'multiple', 'accept', 'autocomplete', 'selected'
+	];
+
+	function isVisible(el) {
+		if (!el.offsetParent && el.tagName !== 'BODY' && el.tagName !== 'HTML') {
+			const style = getComputedStyle(el);
+			if (style.position !== 'fixed' && style.position !== 'sticky') return false;
+		}
+		const rect = el.getBoundingClientRect();
+		if (rect.width === 0 && rect.height === 0) return false;
+		const style = getComputedStyle(el);
+		if (style.display === 'none' || style.visibility === 'hidden') return false;
+		if (parseFloat(style.opacity) === 0) return false;
+		return true;
+	}
+
+	function isBoilerplate(el) {
+		const tag = el.tagName.toLowerCase();
+		if (BOILERPLATE_TAGS.has(tag)) return true;
+		const role = el.getAttribute('role');
+		if (role && BOILERPLATE_ROLES.has(role)) return true;
+		const id = el.id || '';
+		const cls = el.className || '';
+		const idAndClass = id + ' ' + (typeof cls === 'string' ? cls : '');
+		if (BOILERPLATE_PATTERNS.test(idAndClass)) return true;
+		return false;
+	}
+
+	function isJunkLink(el) {
+		if (el.tagName !== 'A') return false;
+		const href = el.getAttribute('href') || '';
+		// Same-page anchors (just a hash)
+		if (href === '#' || href === '') return true;
+		// Same-page section links
+		if (href.startsWith('#') && href.length > 1) return true;
+		for (const pattern of JUNK_HREF_PATTERNS) {
+			if (pattern.test(href)) return true;
+		}
+		// Links whose text is very short and generic
+		const text = (el.textContent || '').trim().toLowerCase();
+		const junkTexts = ['terms', 'privacy', 'legal', 'cookie', 'copyright',
+			'share', 'tweet', 'follow', 'like', 'pin', 'subscribe'];
+		if (junkTexts.includes(text)) return true;
+		return false;
+	}
+
+	function isInteractive(el) {
+		const tag = el.tagName.toLowerCase();
+		if (INTERACTIVE_TAGS.has(tag)) return true;
+		const role = el.getAttribute('role');
+		if (role && INTERACTIVE_ROLES.has(role)) return true;
+		if (el.getAttribute('contenteditable') === 'true') return true;
+		if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown')) return true;
+		if (el.tabIndex > 0) return true;
+		if (el.tabIndex === 0 && !['BODY', 'HTML', 'DIV', 'SPAN'].includes(el.tagName)) return true;
+		try {
+			const style = getComputedStyle(el);
+			if (style.cursor === 'pointer' && !['BODY', 'HTML'].includes(el.tagName)) return true;
+		} catch(e) {}
+		return false;
+	}
+
+	function isScrollable(el) {
+		const style = getComputedStyle(el);
+		const overflowY = style.overflowY;
+		const overflowX = style.overflowX;
+		if (overflowY === 'auto' || overflowY === 'scroll' || overflowX === 'auto' || overflowX === 'scroll') {
+			return el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth;
+		}
+		return false;
+	}
+
+	function getAttributes(el) {
+		const attrs = {};
+		for (const name of ATTR_LIST) {
+			const val = el.getAttribute(name);
+			if (val !== null && val !== '') {
+				attrs[name] = val;
+			}
+		}
+		if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+			attrs['value'] = el.value || '';
+		}
+		return attrs;
+	}
+
+	function getCSSSelector(el) {
+		if (el.id) return '#' + CSS.escape(el.id);
+		let path = [];
+		let current = el;
+		while (current && current !== document.body) {
+			let selector = current.tagName.toLowerCase();
+			if (current.id) {
+				path.unshift('#' + CSS.escape(current.id));
+				break;
+			}
+			const parent = current.parentElement;
+			if (parent) {
+				const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
+				if (siblings.length > 1) {
+					const idx = siblings.indexOf(current) + 1;
+					selector += ':nth-of-type(' + idx + ')';
+				}
+			}
+			path.unshift(selector);
+			current = current.parentElement;
+		}
+		return path.join(' > ');
+	}
+
+	function getDirectText(el) {
+		let text = '';
+		for (const child of el.childNodes) {
+			if (child.nodeType === Node.TEXT_NODE) {
+				text += child.textContent;
+			}
+		}
+		return text.trim();
+	}
+
+	const elements = [];
+	const nodes = [];
+	let idx = 0;
+
+	function walk(el, depth, maxDepth) {
+		if (depth > (maxDepth || 50)) return;
+		if (!el || SKIP_TAGS.has(el.tagName?.toLowerCase())) return;
+		if (el.nodeType !== Node.ELEMENT_NODE) return;
+		if (!isVisible(el)) return;
+
+		// Skip boilerplate subtrees entirely
+		if (depth > 0 && isBoilerplate(el)) return;
+
+		const tag = el.tagName.toLowerCase();
+		const scrollable = isScrollable(el);
+		const interactive = isInteractive(el);
+		const directText = getDirectText(el);
+
+		if (interactive) {
+			// Skip junk links
+			if (isJunkLink(el)) return;
+
+			const rect = el.getBoundingClientRect();
+			const elementData = {
+				index: idx,
+				tag: tag,
+				text: (el.textContent || '').trim().substring(0, 200),
+				attributes: getAttributes(el),
+				rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+				is_editable: el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName),
+				is_scrollable: scrollable,
+				depth: depth,
+				css_selector: getCSSSelector(el)
+			};
+			elements.push(elementData);
+			nodes.push({
+				tag: tag,
+				text: directText,
+				depth: depth,
+				elementIndex: idx,
+				isScrollable: scrollable
+			});
+			idx++;
+		} else if (directText && directText.length > 1) {
+			nodes.push({
+				tag: tag,
+				text: directText,
+				depth: depth,
+				elementIndex: -1,
+				isScrollable: scrollable
+			});
+		}
+
+		for (const child of el.children) {
+			walk(child, depth + 1, maxDepth);
+		}
+
+		if (el.shadowRoot) {
+			nodes.push({
+				tag: '|SHADOW|',
+				text: 'Shadow DOM content:',
+				depth: depth + 1,
+				elementIndex: -1,
+				isScrollable: false
+			});
+			for (const child of el.shadowRoot.children) {
+				walk(child, depth + 2, maxDepth);
+			}
+		}
+
+		if (tag === 'iframe') {
+			try {
+				const iframeDoc = el.contentDocument;
+				if (iframeDoc && iframeDoc.body) {
+					nodes.push({
+						tag: '|IFRAME|',
+						text: 'Iframe: ' + (el.src || el.name || ''),
+						depth: depth + 1,
+						elementIndex: -1,
+						isScrollable: false
+					});
+					walk(iframeDoc.body, depth + 2, maxDepth);
+				}
+			} catch(e) {
+				nodes.push({
+					tag: '|IFRAME-CROSS-ORIGIN|',
+					text: 'Cross-origin iframe: ' + (el.src || ''),
+					depth: depth + 1,
+					elementIndex: -1,
+					isScrollable: false
+				});
+			}
+		}
+	}
+
+	// Prefer content regions if they exist
+	const contentRoot = document.querySelector('main, [role="main"], article, #content, .content')
+		|| document.body;
+	walk(contentRoot, 0, 50);
+
+	// If we got very few elements from the content region, fall back to body
+	if (elements.length < 3 && contentRoot !== document.body) {
+		elements.length = 0;
+		nodes.length = 0;
+		idx = 0;
+		walk(document.body, 0, 50);
+	}
 
 	const scrollTop = document.documentElement.scrollTop || document.body.scrollTop;
 	const scrollHeight = document.documentElement.scrollHeight;

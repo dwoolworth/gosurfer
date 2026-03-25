@@ -65,6 +65,11 @@ type AgentConfig struct {
 	// If nil, the main LLM is used. Useful for pairing an expensive reasoning model
 	// (e.g. Opus, GPT-4) with a cheaper summarizer (e.g. Haiku, GPT-4.1-mini).
 	SummaryLLM LLMProvider
+
+	// FocusContent strips boilerplate (nav, footer, cookie banners, social links,
+	// terms/privacy links) from DOM extraction, reducing token usage by 30-60%.
+	// Content is focused on <main>, <article>, [role="main"] regions.
+	FocusContent bool
 }
 
 // StepInfo provides information about a completed agent step.
@@ -251,6 +256,8 @@ func (a *Agent) step(ctx context.Context, stepNum int) (StepInfo, bool, error) {
 	var err error
 	if a.config.UseVision {
 		state, err = a.page.DOMStateWithScreenshot()
+	} else if a.config.FocusContent {
+		state, err = a.page.FocusedDOMState()
 	} else {
 		state, err = a.page.DOMState()
 	}

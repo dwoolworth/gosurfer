@@ -244,6 +244,17 @@ func runCommand(cmd string, args []string) int {
 			state.URL, state.Title, len(state.Elements), state.ScrollPosition)
 		fmt.Println(state.Tree)
 
+	case "focusedstate", "fstate":
+		state, err := page.FocusedDOMState()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		lastState = state
+		fmt.Printf("URL:   %s\nTitle: %s\nElements: %d (focused)\nScroll: %.0f%%\n\n",
+			state.URL, state.Title, len(state.Elements), state.ScrollPosition)
+		fmt.Println(state.Tree)
+
 	case "eval":
 		if len(args) < 1 {
 			fmt.Fprintln(os.Stderr, "Usage: eval <javascript>")
@@ -424,7 +435,8 @@ func printHelp() {
     eval <js>               Evaluate JavaScript expression
 
   Extraction:
-    state                   Show indexed DOM state (run before click/type by index)
+    state                   Show full indexed DOM state
+    focusedstate            Show content-focused DOM (no nav/footer/junk links)
     text <selector>         Get text content of element
     html                    Get full page HTML
     screenshot [file]       Save viewport screenshot (default: screenshot.png)

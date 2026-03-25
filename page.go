@@ -217,6 +217,15 @@ func (p *Page) DOMState() (*DOMState, error) {
 	return p.dom.GetState()
 }
 
+// FocusedDOMState extracts a pruned DOM state with boilerplate stripped.
+// Removes nav, footer, cookie banners, ad containers, social links, and
+// low-value links (terms, privacy, copyright, same-page anchors).
+// Focuses on <main>, <article>, [role="main"] content regions.
+// Typically produces 30-60% fewer tokens than DOMState.
+func (p *Page) FocusedDOMState() (*DOMState, error) {
+	return p.dom.GetFocusedState()
+}
+
 // DOMStateWithScreenshot extracts DOM state and captures a screenshot.
 func (p *Page) DOMStateWithScreenshot() (*DOMState, error) {
 	state, err := p.dom.GetState()

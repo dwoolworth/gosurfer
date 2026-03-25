@@ -540,6 +540,65 @@ func TestPage_DOMState(t *testing.T) {
 	}
 }
 
+func TestPage_FocusedDOMState(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL)
+
+	full, err := page.DOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	focused, err := page.FocusedDOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Focused state should have fewer or equal elements (boilerplate stripped)
+	if len(focused.Elements) > len(full.Elements) {
+		t.Errorf("focused (%d elements) should not have more than full (%d elements)",
+			len(focused.Elements), len(full.Elements))
+	}
+
+	// Should still have basic structure
+	if focused.URL == "" {
+		t.Error("URL should not be empty")
+	}
+	if focused.Title != "Test Page" {
+		t.Errorf("title = %q", focused.Title)
+	}
+	if focused.Tree == "" {
+		t.Error("tree should not be empty")
+	}
+}
+
+func TestPage_FocusedDOMState_StripsBoilerplate(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+
+	full, err := page.DOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	focused, err := page.FocusedDOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The locator page has <nav> which should be stripped in focused mode
+	// Focused should have fewer elements
+	if len(focused.Elements) >= len(full.Elements) {
+		t.Errorf("focused (%d) should have fewer elements than full (%d) — nav should be stripped",
+			len(focused.Elements), len(full.Elements))
+	}
+
+	// Content elements should still be present (form inputs, buttons)
+	if !strings.Contains(focused.Tree, "Sign In") {
+		t.Error("focused state should still contain main content like 'Sign In'")
+	}
+}
+
 func TestPage_DOMStateWithScreenshot(t *testing.T) {
 	page := newPage(t)
 	_ = page.Navigate(ts.URL)
