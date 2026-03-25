@@ -121,6 +121,13 @@ func NewBrowser(cfg ...BrowserConfig) (*Browser, error) {
 		}
 	}
 
+	// HumanMode: remove automation flags that bot detectors check
+	if config.HumanMode {
+		l = l.Delete("enable-automation")
+		l = l.Delete("no-startup-window")
+		l = l.Set("disable-features", "site-per-process,TranslateUI,AutomationControlled")
+	}
+
 	if config.ExecPath != "" {
 		l = l.Bin(config.ExecPath)
 	}
