@@ -194,6 +194,128 @@ func (d *DOMService) serialize(nodes []domNode, elements map[int]*DOMElement) st
 	return b.String()
 }
 
+// actionableTags are elements that need [index] notation because the LLM can act on them.
+var actionableTags = map[string]bool{
+	"a": true, "button": true, "input": true, "select": true,
+	"textarea": true, "details": true, "summary": true,
+}
+
+// headingLevel returns the markdown heading prefix for h1-h6 tags, or empty string.
+func headingLevel(tag string) string {
+	switch tag {
+	case "h1":
+		return "# "
+	case "h2":
+		return "## "
+	case "h3":
+		return "### "
+	case "h4":
+		return "#### "
+	case "h5":
+		return "##### "
+	case "h6":
+		return "###### "
+	}
+	return ""
+}
+
+// serializeFocused converts the DOM tree into a compact format optimized for token efficiency.
+// Only actionable elements (links, buttons, inputs) get [index] tags.
+// Headings become markdown. Paragraphs and other text become plain text.
+// Empty elements are skipped entirely.
+func (d *DOMService) serializeFocused(nodes []domNode, elements map[int]*DOMElement) string {
+	var b strings.Builder
+	b.Grow(4096)
+
+	for _, node := range nodes {
+		indent := strings.Repeat("  ", node.Depth)
+
+		if node.ElementIndex >= 0 {
+			el, ok := elements[node.ElementIndex]
+			if !ok {
+				continue
+			}
+
+			text := truncate(el.Text, 80)
+
+			// Skip empty elements with no meaningful attributes
+			if text == "" && !hasActionableAttrs(el) {
+				continue
+			}
+
+			if actionableTags[el.Tag] || hasInteractiveRole(el) {
+				// Actionable element: keep [index]<tag> format
+				b.WriteString(fmt.Sprintf("%s[%d]<%s", indent, el.Index, el.Tag))
+				for _, attr := range focusedAttrs {
+					if val, ok := el.Attributes[attr]; ok && val != "" {
+						b.WriteString(fmt.Sprintf(` %s=%q`, attr, val))
+					}
+				}
+				if text != "" {
+					b.WriteString(fmt.Sprintf(">%s</%s>\n", text, el.Tag))
+				} else {
+					b.WriteString(" />\n")
+				}
+			} else if prefix := headingLevel(el.Tag); prefix != "" {
+				// Heading: render as markdown
+				if text != "" {
+					b.WriteString(fmt.Sprintf("%s%s%s\n", indent, prefix, text))
+				}
+			} else if text != "" {
+				// Other element with text: render as plain text
+				b.WriteString(fmt.Sprintf("%s%s\n", indent, text))
+			}
+		} else if node.Text != "" {
+			// Non-interactive text node
+			if prefix := headingLevel(node.Tag); prefix != "" {
+				text := truncate(node.Text, 120)
+				if text != "" {
+					b.WriteString(fmt.Sprintf("%s%s%s\n", indent, prefix, text))
+				}
+			} else {
+				text := truncate(node.Text, 120)
+				if text != "" {
+					b.WriteString(fmt.Sprintf("%s%s\n", indent, text))
+				}
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// hasActionableAttrs returns true if the element has attributes worth preserving
+// (href, placeholder, value, name, aria-label).
+func hasActionableAttrs(el *DOMElement) bool {
+	for _, attr := range []string{"href", "placeholder", "value", "name", "aria-label"} {
+		if val, ok := el.Attributes[attr]; ok && val != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasInteractiveRole returns true if the element has an ARIA role that makes it actionable.
+func hasInteractiveRole(el *DOMElement) bool {
+	role, ok := el.Attributes["role"]
+	if !ok {
+		return false
+	}
+	switch role {
+	case "button", "link", "textbox", "checkbox", "radio", "combobox",
+		"listbox", "menuitem", "option", "searchbox", "slider",
+		"spinbutton", "switch", "tab":
+		return true
+	}
+	return false
+}
+
+// focusedAttrs is a reduced set of attributes for focused serialization.
+var focusedAttrs = []string{
+	"type", "name", "placeholder", "value", "href",
+	"aria-label", "title", "alt", "disabled",
+}
+
 // serializableAttrs are HTML attributes included in the LLM-facing serialization.
 var serializableAttrs = []string{
 	"type", "name", "placeholder", "value", "href", "role",
@@ -237,7 +359,7 @@ func (d *DOMService) GetFocusedState() (*DOMState, error) {
 		state.Tabs = d.getTabInfo()
 	}
 
-	state.Tree = d.serialize(extracted.Nodes, elements)
+	state.Tree = d.serializeFocused(extracted.Nodes, elements)
 	d.lastState = state
 	return state, nil
 }

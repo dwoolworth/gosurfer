@@ -599,6 +599,39 @@ func TestPage_FocusedDOMState_StripsBoilerplate(t *testing.T) {
 	}
 }
 
+func TestPage_FocusedDOMState_CompactFormat(t *testing.T) {
+	page := newPage(t)
+	_ = page.Navigate(ts.URL + "/locator")
+
+	focused, err := page.FocusedDOMState()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tree := focused.Tree
+
+	// Headings should be markdown, not tagged
+	if strings.Contains(tree, "<h1>") || strings.Contains(tree, "<h2>") {
+		t.Error("headings should be rendered as markdown, not HTML tags")
+	}
+	if !strings.Contains(tree, "# Welcome") || !strings.Contains(tree, "## Getting Started") {
+		t.Errorf("expected markdown headings in tree:\n%s", tree)
+	}
+
+	// Actionable elements should have indices
+	if !strings.Contains(tree, "[") {
+		t.Error("actionable elements should have [index] tags")
+	}
+
+	// Links and buttons should keep their tags
+	if !strings.Contains(tree, "<button") {
+		t.Error("buttons should keep their tags")
+	}
+	if !strings.Contains(tree, "<input") {
+		t.Error("inputs should keep their tags")
+	}
+}
+
 func TestPage_DOMStateWithScreenshot(t *testing.T) {
 	page := newPage(t)
 	_ = page.Navigate(ts.URL)
