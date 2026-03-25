@@ -89,6 +89,8 @@ func ensureBrowser() {
 
 	headless := os.Getenv("GOSURFER_HEADLESS") != "false"
 	stealth := os.Getenv("GOSURFER_STEALTH") == "true"
+	humanMode := os.Getenv("GOSURFER_HUMAN") == "true"
+	profile := os.Getenv("GOSURFER_PROFILE")
 
 	var err error
 	execPath := os.Getenv("CHROME_BIN")
@@ -100,9 +102,11 @@ func ensureBrowser() {
 	}
 
 	browser, err = gosurfer.NewBrowser(gosurfer.BrowserConfig{
-		Headless: headless,
-		Stealth:  stealth,
-		ExecPath: execPath,
+		Headless:    headless,
+		Stealth:     stealth,
+		HumanMode:   humanMode,
+		ExecPath:    execPath,
+		UserDataDir: profile,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error launching browser: %v\n", err)
@@ -464,6 +468,8 @@ func printHelp() {
   Environment:
     GOSURFER_HEADLESS=false   Show browser window
     GOSURFER_STEALTH=true     Enable anti-detection mode
+    GOSURFER_HUMAN=true       Maximum anti-detection (system Chrome + new headless + stealth)
+    GOSURFER_PROFILE=/path    Use Chrome profile directory (persists login state)
     CHROME_BIN=/path/chrome   Custom Chrome path`)
 }
 

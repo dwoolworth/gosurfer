@@ -14,6 +14,7 @@ package gosurfer
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -48,6 +49,11 @@ type BrowserConfig struct {
 	// spoofs plugins/WebGL, sets realistic user agent, etc.).
 	Stealth bool
 
+	// HumanMode enables maximum anti-detection: system Chrome, new headless mode,
+	// stealth patches, and human-like behavior (random delays, mouse movement).
+	// Automatically sets Stealth=true and uses --headless=new.
+	HumanMode bool
+
 	// AllowedDomains restricts navigation to these domains (glob patterns).
 	AllowedDomains []string
 
@@ -78,11 +84,31 @@ func NewBrowser(cfg ...BrowserConfig) (*Browser, error) {
 		}
 	}
 
+	// HumanMode implies stealth + system Chrome + new headless
+	if config.HumanMode {
+		config.Stealth = true
+		if config.ExecPath == "" {
+			config.ExecPath = findSystemChrome()
+		}
+	}
+
 	l := launcher.New().
-		Headless(config.Headless).
 		Set("window-size", fmt.Sprintf("%d,%d", config.WindowWidth, config.WindowHeight)).
 		Set("disable-gpu").
 		Set("disable-dev-shm-usage")
+
+	// Use new headless mode (same TLS/rendering fingerprint as regular Chrome)
+	// Falls back to old headless if not in HumanMode
+	if config.Headless {
+		if config.HumanMode {
+			// --headless=new uses the real Chrome rendering pipeline
+			l = l.Headless(false).Set("headless", "new")
+		} else {
+			l = l.Headless(true)
+		}
+	} else {
+		l = l.Headless(false)
+	}
 
 	// Stealth launch flags
 	if config.Stealth {
@@ -224,4 +250,33 @@ func (b *Browser) Rod() *rod.Browser {
 // Close shuts down the browser.
 func (b *Browser) Close() error {
 	return b.rod.Close()
+}
+
+// findSystemChrome returns the path to the system Chrome installation.
+// Prefers system Chrome over rod-downloaded Chromium for realistic TLS fingerprints.
+func findSystemChrome() string {
+	paths := []string{
+		// macOS
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		// Linux
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		// Windows (common locations)
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+	}
+	for _, p := range paths {
+		if fileExists(p) {
+			return p
+		}
+	}
+	return "" // fall back to rod's auto-detection
+}
+
+// fileExists checks if a file exists at the given path.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
