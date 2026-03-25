@@ -638,8 +638,10 @@ const focusedDOMExtractionScript = `() => {
 		/facebook\.com/i, /twitter\.com/i, /x\.com\/(?!.*\/status)/i,
 		/instagram\.com/i, /linkedin\.com/i, /youtube\.com/i,
 		/tiktok\.com/i, /pinterest\.com/i, /reddit\.com/i,
-		/^mailto:/i, /^tel:/i, /^javascript:/i,
+		/^javascript:/i,
 		/^#$/  // bare hash (same-page anchor with no target)
+		// Note: mailto: and tel: are kept — they're legitimate contact links
+		// when they survive boilerplate pruning (nav/footer already stripped)
 	];
 
 	const ATTR_LIST = [
