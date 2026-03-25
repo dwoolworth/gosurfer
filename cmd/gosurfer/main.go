@@ -201,6 +201,22 @@ func runCommand(cmd string, args []string) int {
 		}
 		fmt.Printf("Screenshot saved: %s (%d bytes)\n", file, len(png))
 
+	case "fullscreenshot", "fullshot":
+		file := "fullpage.png"
+		if len(args) > 0 {
+			file = args[0]
+		}
+		png, err := page.FullScreenshot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(file, png, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Full page screenshot saved: %s (%d bytes)\n", file, len(png))
+
 	case "pdf":
 		file := "page.pdf"
 		if len(args) > 0 {
@@ -411,7 +427,8 @@ func printHelp() {
     state                   Show indexed DOM state (run before click/type by index)
     text <selector>         Get text content of element
     html                    Get full page HTML
-    screenshot [file]       Save screenshot (default: screenshot.png)
+    screenshot [file]       Save viewport screenshot (default: screenshot.png)
+    fullscreenshot [file]   Save full page screenshot (default: fullpage.png)
     pdf [file]              Save PDF (default: page.pdf)
 
   Storage:
