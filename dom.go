@@ -222,10 +222,39 @@ func headingLevel(tag string) string {
 // serializeFocused converts the DOM tree into a compact format optimized for token efficiency.
 // Only actionable elements (links, buttons, inputs) get [index] tags.
 // Headings become markdown. Paragraphs and other text become plain text.
-// Empty elements are skipped entirely.
+// Empty elements are skipped entirely. Duplicate text is deduplicated.
 func (d *DOMService) serializeFocused(nodes []domNode, elements map[int]*DOMElement) string {
 	var b strings.Builder
 	b.Grow(4096)
+
+	// Track recent text for deduplication
+	recentTexts := make([]string, 0, 8)
+	const dedupeWindow = 5
+
+	addRecent := func(text string) {
+		normalized := strings.ToLower(strings.TrimSpace(text))
+		if normalized == "" {
+			return
+		}
+		recentTexts = append(recentTexts, normalized)
+		if len(recentTexts) > dedupeWindow {
+			recentTexts = recentTexts[1:]
+		}
+	}
+
+	isDuplicate := func(text string) bool {
+		normalized := strings.ToLower(strings.TrimSpace(text))
+		if normalized == "" || len(normalized) < 10 {
+			return false // don't dedupe very short text
+		}
+		for _, recent := range recentTexts {
+			// Skip if this text is contained in a recent line or vice versa
+			if strings.Contains(recent, normalized) || strings.Contains(normalized, recent) {
+				return true
+			}
+		}
+		return false
+	}
 
 	for _, node := range nodes {
 		indent := strings.Repeat("  ", node.Depth)
@@ -244,7 +273,7 @@ func (d *DOMService) serializeFocused(nodes []domNode, elements map[int]*DOMElem
 			}
 
 			if actionableTags[el.Tag] || hasInteractiveRole(el) {
-				// Actionable element: keep [index]<tag> format
+				// Actionable element: keep [index]<tag> format (never dedupe these)
 				b.WriteString(fmt.Sprintf("%s[%d]<%s", indent, el.Index, el.Tag))
 				for _, attr := range focusedAttrs {
 					if val, ok := el.Attributes[attr]; ok && val != "" {
@@ -253,31 +282,30 @@ func (d *DOMService) serializeFocused(nodes []domNode, elements map[int]*DOMElem
 				}
 				if text != "" {
 					b.WriteString(fmt.Sprintf(">%s</%s>\n", text, el.Tag))
+					addRecent(text)
 				} else {
 					b.WriteString(" />\n")
 				}
 			} else if prefix := headingLevel(el.Tag); prefix != "" {
-				// Heading: render as markdown
-				if text != "" {
+				if text != "" && !isDuplicate(text) {
 					b.WriteString(fmt.Sprintf("%s%s%s\n", indent, prefix, text))
+					addRecent(text)
 				}
-			} else if text != "" {
-				// Other element with text: render as plain text
+			} else if text != "" && !isDuplicate(text) {
 				b.WriteString(fmt.Sprintf("%s%s\n", indent, text))
+				addRecent(text)
 			}
 		} else if node.Text != "" {
-			// Non-interactive text node
-			if prefix := headingLevel(node.Tag); prefix != "" {
-				text := truncate(node.Text, 120)
-				if text != "" {
-					b.WriteString(fmt.Sprintf("%s%s%s\n", indent, prefix, text))
-				}
-			} else {
-				text := truncate(node.Text, 120)
-				if text != "" {
-					b.WriteString(fmt.Sprintf("%s%s\n", indent, text))
-				}
+			text := truncate(node.Text, 120)
+			if text == "" || isDuplicate(text) {
+				continue
 			}
+			if prefix := headingLevel(node.Tag); prefix != "" {
+				b.WriteString(fmt.Sprintf("%s%s%s\n", indent, prefix, text))
+			} else {
+				b.WriteString(fmt.Sprintf("%s%s\n", indent, text))
+			}
+			addRecent(text)
 		}
 	}
 

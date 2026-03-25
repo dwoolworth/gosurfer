@@ -186,6 +186,7 @@ func runCommand(cmd string, args []string) int {
 		fmt.Printf("Typed %q into %s\n", text, selector)
 
 	case "screenshot":
+		args = navigateIfURL(args)
 		file := "screenshot.png"
 		if len(args) > 0 {
 			file = args[0]
@@ -202,6 +203,7 @@ func runCommand(cmd string, args []string) int {
 		fmt.Printf("Screenshot saved: %s (%d bytes)\n", file, len(png))
 
 	case "fullscreenshot", "fullshot":
+		args = navigateIfURL(args)
 		file := "fullpage.png"
 		if len(args) > 0 {
 			file = args[0]
@@ -218,6 +220,7 @@ func runCommand(cmd string, args []string) int {
 		fmt.Printf("Full page screenshot saved: %s (%d bytes)\n", file, len(png))
 
 	case "pdf":
+		args = navigateIfURL(args)
 		file := "page.pdf"
 		if len(args) > 0 {
 			file = args[0]
@@ -234,6 +237,7 @@ func runCommand(cmd string, args []string) int {
 		fmt.Printf("PDF saved: %s (%d bytes)\n", file, len(pdf))
 
 	case "state":
+		_ = navigateIfURL(args)
 		state, err := page.DOMState()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -245,6 +249,7 @@ func runCommand(cmd string, args []string) int {
 		fmt.Println(state.Tree)
 
 	case "focusedstate", "fstate":
+		_ = navigateIfURL(args)
 		state, err := page.FocusedDOMState()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -494,6 +499,50 @@ func splitArgs(line string) []string {
 	if current.Len() > 0 || hasQuote {
 		args = append(args, current.String())
 	}
+	return args
+}
+
+// fileExtensions are common file extensions that should not be treated as URLs.
+var fileExtensions = []string{
+	".png", ".jpg", ".jpeg", ".gif", ".pdf", ".html", ".json", ".har",
+	".txt", ".csv", ".xml", ".zip", ".tar", ".gz",
+}
+
+// navigateIfURL checks if the first arg looks like a URL, navigates to it,
+// and returns the remaining args. Used by commands that support "cmd <url>".
+func navigateIfURL(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	arg := args[0]
+
+	// Explicit protocol — definitely a URL
+	if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
+		if err := page.Navigate(arg); err != nil {
+			fmt.Fprintf(os.Stderr, "Error navigating: %v\n", err)
+		}
+		return args[1:]
+	}
+
+	// Skip file paths and extensions
+	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, ".") {
+		return args
+	}
+	for _, ext := range fileExtensions {
+		if strings.HasSuffix(strings.ToLower(arg), ext) {
+			return args
+		}
+	}
+
+	// Looks like a domain (has a dot, no spaces)
+	if strings.Contains(arg, ".") && !strings.Contains(arg, " ") {
+		url := "https://" + arg
+		if err := page.Navigate(url); err != nil {
+			fmt.Fprintf(os.Stderr, "Error navigating: %v\n", err)
+		}
+		return args[1:]
+	}
+
 	return args
 }
 
