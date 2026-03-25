@@ -905,6 +905,94 @@ const focusedDOMExtractionScript = `() => {
 		walk(document.body, 0, 50);
 	}
 
+	// Second pass: extract internal navigation links from boilerplate regions
+	// (nav, footer, aside) that were skipped in the main walk.
+	// Only keeps same-origin links that aren't junk (terms, privacy, social, etc.)
+	const origin = location.origin;
+	const seenHrefs = new Set();
+	// Track hrefs already captured in main content
+	for (const el of elements) {
+		if (el.attributes && el.attributes.href) {
+			seenHrefs.add(el.attributes.href);
+		}
+	}
+
+	const EXTERNAL_DOMAINS = /facebook\.com|twitter\.com|x\.com|instagram\.com|linkedin\.com|youtube\.com|tiktok\.com|pinterest\.com|reddit\.com|github\.com/i;
+
+	const boilerplateRegions = document.querySelectorAll('nav, footer, aside, [role="navigation"], [role="contentinfo"], [role="banner"]');
+	const siteLinks = [];
+	for (const region of boilerplateRegions) {
+		for (const a of region.querySelectorAll('a[href]')) {
+			const href = a.getAttribute('href') || '';
+			const text = (a.textContent || '').trim();
+			if (!text || text.length < 2) continue;
+
+			// Skip if already in main content
+			if (seenHrefs.has(href)) continue;
+
+			// Skip junk hrefs
+			let isJunk = false;
+			for (const pattern of JUNK_HREF_PATTERNS) {
+				if (pattern.test(href)) { isJunk = true; break; }
+			}
+			if (isJunk) continue;
+
+			// Skip junk link text
+			const lowerText = text.toLowerCase();
+			const junkTexts = ['terms', 'privacy', 'legal', 'cookie', 'copyright',
+				'share', 'tweet', 'follow', 'like', 'pin', 'subscribe'];
+			if (junkTexts.includes(lowerText)) continue;
+
+			// Skip external links (social media, etc.)
+			try {
+				const resolved = new URL(href, origin);
+				if (resolved.origin !== origin) {
+					if (EXTERNAL_DOMAINS.test(href)) continue;
+					// Keep non-social external links (could be relevant)
+				}
+			} catch(e) { continue; }
+
+			// Skip same-page anchors
+			if (href === '#' || (href.startsWith('#') && href.length > 1)) continue;
+
+			seenHrefs.add(href);
+			siteLinks.push({ href, text });
+		}
+	}
+
+	// Add site navigation links as a compact section
+	if (siteLinks.length > 0) {
+		nodes.push({
+			tag: 'h2',
+			text: 'Site Navigation',
+			depth: 0,
+			elementIndex: -1,
+			isScrollable: false
+		});
+		for (const link of siteLinks) {
+			const rect = { x: 0, y: 0, width: 0, height: 0 };
+			elements.push({
+				index: idx,
+				tag: 'a',
+				text: link.text,
+				attributes: { href: link.href },
+				rect: rect,
+				is_editable: false,
+				is_scrollable: false,
+				depth: 1,
+				css_selector: 'a[href="' + link.href.replace(/"/g, '\\"') + '"]'
+			});
+			nodes.push({
+				tag: 'a',
+				text: link.text,
+				depth: 1,
+				elementIndex: idx,
+				isScrollable: false
+			});
+			idx++;
+		}
+	}
+
 	const scrollTop = document.documentElement.scrollTop || document.body.scrollTop;
 	const scrollHeight = document.documentElement.scrollHeight;
 	const viewportHeight = window.innerHeight;

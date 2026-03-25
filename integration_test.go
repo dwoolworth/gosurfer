@@ -576,26 +576,19 @@ func TestPage_FocusedDOMState_StripsBoilerplate(t *testing.T) {
 	page := newPage(t)
 	_ = page.Navigate(ts.URL + "/locator")
 
-	full, err := page.DOMState()
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	focused, err := page.FocusedDOMState()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The locator page has <nav> which should be stripped in focused mode
-	// Focused should have fewer elements
-	if len(focused.Elements) >= len(full.Elements) {
-		t.Errorf("focused (%d) should have fewer elements than full (%d) — nav should be stripped",
-			len(focused.Elements), len(full.Elements))
-	}
-
 	// Content elements should still be present (form inputs, buttons)
 	if !strings.Contains(focused.Tree, "Sign In") {
 		t.Error("focused state should still contain main content like 'Sign In'")
+	}
+
+	// Nav links should be recovered in Site Navigation section
+	if !strings.Contains(focused.Tree, "Site Navigation") {
+		t.Error("focused state should include Site Navigation section with recovered nav links")
 	}
 }
 
