@@ -1,0 +1,57 @@
+# gosurfer HumanMode container
+# Uses Chromium with --headless=new for real browser fingerprint,
+# stealth patches, and optional persistent profile + proxy support.
+#
+# Build:
+#   docker build -f deploy/Dockerfile.human -t gosurfer-human .
+#
+# Run with proxy (your Tailscale NAS):
+#   docker run --rm -e GOSURFER_PROXY=http://sdinas02:3128 gosurfer-human \
+#     focusedstate https://example.com
+#
+# Run with persistent profile:
+#   docker run --rm -v ./chrome-profile:/home/gosurfer/.chrome-profile \
+#     -e GOSURFER_PROFILE=/home/gosurfer/.chrome-profile \
+#     gosurfer-human focusedstate https://example.com
+
+# Stage 1: Build
+FROM golang:1.23-alpine AS builder
+RUN apk add --no-cache git upx
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /gosurfer ./cmd/gosurfer/ \
+    && upx --best --lzma /gosurfer
+
+# Stage 2: Runtime
+FROM alpine:3.20
+
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    font-noto-emoji \
+    font-noto-cjk \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user with home directory for profile storage
+RUN adduser -D -u 1000 gosurfer
+USER gosurfer
+WORKDIR /home/gosurfer
+
+COPY --from=builder /gosurfer .
+
+# Default to HumanMode with system Chromium
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV GOSURFER_HUMAN=true
+ENV GOSURFER_HEADLESS=true
+
+# Profile and proxy are set at runtime via env vars:
+#   GOSURFER_PROFILE=/home/gosurfer/.chrome-profile
+#   GOSURFER_PROXY=http://sdinas02:3128
+
+ENTRYPOINT ["./gosurfer"]

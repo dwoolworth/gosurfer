@@ -91,6 +91,7 @@ func ensureBrowser() {
 	stealth := os.Getenv("GOSURFER_STEALTH") == "true"
 	humanMode := os.Getenv("GOSURFER_HUMAN") == "true"
 	profile := os.Getenv("GOSURFER_PROFILE")
+	proxy := os.Getenv("GOSURFER_PROXY")
 
 	var err error
 	execPath := os.Getenv("CHROME_BIN")
@@ -107,6 +108,7 @@ func ensureBrowser() {
 		HumanMode:   humanMode,
 		ExecPath:    execPath,
 		UserDataDir: profile,
+		Proxy:       proxy,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error launching browser: %v\n", err)
@@ -470,6 +472,7 @@ func printHelp() {
     GOSURFER_STEALTH=true     Enable anti-detection mode
     GOSURFER_HUMAN=true       Maximum anti-detection (system Chrome + new headless + stealth)
     GOSURFER_PROFILE=/path    Use Chrome profile directory (persists login state)
+    GOSURFER_PROXY=host:port  Route traffic through HTTP/SOCKS proxy
     CHROME_BIN=/path/chrome   Custom Chrome path`)
 }
 

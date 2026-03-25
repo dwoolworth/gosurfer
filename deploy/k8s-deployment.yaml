@@ -1,0 +1,92 @@
+# gosurfer HumanMode deployment for Kubernetes
+# Routes traffic through Tailscale egress proxy on sdinas02 NAS (residential IP)
+#
+# Prerequisites:
+#   1. Tailscale Kubernetes operator with egress to sdinas02
+#   2. Chrome profile stored in a PVC or ConfigMap (optional)
+#   3. Container image built from deploy/Dockerfile.human
+#
+# Build & push:
+#   docker build -f deploy/Dockerfile.human -t your-registry/gosurfer-human:latest .
+#   docker push your-registry/gosurfer-human:latest
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gosurfer-profile
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gosurfer-agent
+  labels:
+    app: gosurfer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gosurfer
+  template:
+    metadata:
+      labels:
+        app: gosurfer
+    spec:
+      containers:
+        - name: gosurfer
+          image: your-registry/gosurfer-human:latest
+          env:
+            # Route through Tailscale VPN -> sdinas02 NAS -> residential IP
+            - name: GOSURFER_PROXY
+              value: "http://sdinas02:3128"
+            # Persistent Chrome profile (preserves cookies, login state)
+            - name: GOSURFER_PROFILE
+              value: "/home/gosurfer/.chrome-profile"
+            # HumanMode: system Chrome + new headless + stealth
+            - name: GOSURFER_HUMAN
+              value: "true"
+            # LLM API keys (from secrets)
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gosurfer-secrets
+                  key: openai-api-key
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gosurfer-secrets
+                  key: anthropic-api-key
+                  optional: true
+          volumeMounts:
+            - name: chrome-profile
+              mountPath: /home/gosurfer/.chrome-profile
+            # Chrome needs shared memory for rendering
+            - name: dshm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1.5Gi"
+              cpu: "1000m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: chrome-profile
+          persistentVolumeClaim:
+            claimName: gosurfer-profile
+        # Shared memory for Chrome (default 64MB is too small)
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
