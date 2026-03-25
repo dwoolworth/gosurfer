@@ -102,6 +102,17 @@ func ensureBrowser() {
 		}
 	}
 
+	// Auto-detect container environment for --no-sandbox
+	noSandbox := os.Getenv("GOSURFER_NO_SANDBOX") == "true"
+	if !noSandbox {
+		// Detect Docker/K8s: /.dockerenv or /run/secrets/kubernetes.io
+		if _, err := os.Stat("/.dockerenv"); err == nil {
+			noSandbox = true
+		} else if _, err := os.Stat("/run/secrets/kubernetes.io"); err == nil {
+			noSandbox = true
+		}
+	}
+
 	browser, err = gosurfer.NewBrowser(gosurfer.BrowserConfig{
 		Headless:    headless,
 		Stealth:     stealth,
@@ -109,6 +120,7 @@ func ensureBrowser() {
 		ExecPath:    execPath,
 		UserDataDir: profile,
 		Proxy:       proxy,
+		NoSandbox:   noSandbox,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error launching browser: %v\n", err)

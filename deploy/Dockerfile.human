@@ -1,18 +1,27 @@
 # gosurfer HumanMode container
-# Uses Chromium with --headless=new for real browser fingerprint,
-# stealth patches, and optional persistent profile + proxy support.
+# Chromium + stealth + --headless=new + optional Chrome profile + proxy
 #
-# Build:
+# === Build (without profile baked in) ===
 #   docker build -f deploy/Dockerfile.human -t gosurfer-human .
 #
-# Run with proxy (your Tailscale NAS):
-#   docker run --rm -e GOSURFER_PROXY=http://sdinas02:3128 gosurfer-human \
-#     focusedstate https://example.com
+# === Build with profile baked in (self-contained for K8s) ===
+#   # First create profile locally:  ./deploy/create-profile.sh ~/.gosurfer-profile
+#   cp -r ~/.gosurfer-profile deploy/chrome-profile
+#   docker build -f deploy/Dockerfile.human -t gosurfer-human .
+#   rm -rf deploy/chrome-profile
 #
-# Run with persistent profile:
-#   docker run --rm -v ./chrome-profile:/home/gosurfer/.chrome-profile \
+# === Run ===
+#   # With baked-in profile + proxy:
+#   docker run --rm -e GOSURFER_PROXY=http://sdinas02:3128 \
+#     gosurfer-human focusedstate https://example.com
+#
+#   # Mount profile at runtime instead:
+#   docker run --rm -v ~/.gosurfer-profile:/home/gosurfer/.chrome-profile \
 #     -e GOSURFER_PROFILE=/home/gosurfer/.chrome-profile \
 #     gosurfer-human focusedstate https://example.com
+#
+#   # Interactive REPL:
+#   docker run --rm -it -e GOSURFER_PROXY=http://sdinas02:3128 gosurfer-human
 
 # Stage 1: Build
 FROM golang:1.23-alpine AS builder
@@ -38,20 +47,33 @@ RUN apk add --no-cache \
     font-noto-cjk \
     && rm -rf /var/cache/apk/*
 
-# Create non-root user with home directory for profile storage
+# Create non-root user
 RUN adduser -D -u 1000 gosurfer
+
+# Copy gosurfer binary
+COPY --from=builder /gosurfer /home/gosurfer/gosurfer
+
+# Copy Chrome profile if it exists in the build context (optional)
+# To bake in: cp -r ~/.gosurfer-profile deploy/chrome-profile
+COPY --chown=gosurfer:gosurfer deploy/chrome-profil[e] /home/gosurfer/.chrome-profile/
+
+# Remove SingletonLock if it was copied from macOS
+RUN rm -f /home/gosurfer/.chrome-profile/SingletonLock \
+    /home/gosurfer/.chrome-profile/SingletonSocket \
+    /home/gosurfer/.chrome-profile/SingletonCookie 2>/dev/null; true
+
 USER gosurfer
 WORKDIR /home/gosurfer
 
-COPY --from=builder /gosurfer .
-
-# Default to HumanMode with system Chromium
+# HumanMode with container-appropriate settings
 ENV CHROME_BIN=/usr/bin/chromium-browser
 ENV GOSURFER_HUMAN=true
 ENV GOSURFER_HEADLESS=true
 
-# Profile and proxy are set at runtime via env vars:
-#   GOSURFER_PROFILE=/home/gosurfer/.chrome-profile
+# Auto-detect baked-in profile; override with GOSURFER_PROFILE env var
+ENV GOSURFER_PROFILE=/home/gosurfer/.chrome-profile
+
+# Proxy is set at runtime:
 #   GOSURFER_PROXY=http://sdinas02:3128
 
 ENTRYPOINT ["./gosurfer"]
