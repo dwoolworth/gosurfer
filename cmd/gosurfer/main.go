@@ -30,15 +30,17 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/dwoolworth/gosurfer"
 )
 
 var (
-	browser *gosurfer.Browser
-	page    *gosurfer.Page
-	har     *gosurfer.HARRecorder
+	browser   *gosurfer.Browser
+	page      *gosurfer.Page
+	har       *gosurfer.HARRecorder
+	lastState *gosurfer.DOMState // cached for index-based commands
 )
 
 func main() {
@@ -53,6 +55,7 @@ func main() {
 	// Interactive REPL mode
 	fmt.Println("gosurfer CLI - type 'help' for commands, 'quit' to exit")
 	ensureBrowser()
+	fmt.Println("Browser ready.")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print("gosurfer> ")
@@ -88,11 +91,18 @@ func ensureBrowser() {
 	stealth := os.Getenv("GOSURFER_STEALTH") == "true"
 
 	var err error
+	execPath := os.Getenv("CHROME_BIN")
+	if execPath == "" {
+		// Prefer system Chrome on macOS — rod-downloaded Chromium can hit Gatekeeper issues
+		if _, err := os.Stat("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"); err == nil {
+			execPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+		}
+	}
+
 	browser, err = gosurfer.NewBrowser(gosurfer.BrowserConfig{
-		Headless:  headless,
-		Stealth:   stealth,
-		NoSandbox: os.Getenv("CHROME_BIN") != "",
-		ExecPath:  os.Getenv("CHROME_BIN"),
+		Headless: headless,
+		Stealth:  stealth,
+		ExecPath: execPath,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error launching browser: %v\n", err)
@@ -135,26 +145,45 @@ func runCommand(cmd string, args []string) int {
 
 	case "click":
 		if len(args) < 1 {
-			fmt.Fprintln(os.Stderr, "Usage: click <selector>")
+			fmt.Fprintln(os.Stderr, "Usage: click <selector or index>")
 			return 1
 		}
-		if err := page.Click(args[0]); err != nil {
+		selector := args[0]
+		// If it's a number, look up the element by index from last state
+		if idx, err := strconv.Atoi(selector); err == nil {
+			sel, err := selectorForIndex(idx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return 1
+			}
+			selector = sel
+		}
+		if err := page.Click(selector); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		fmt.Println("Clicked:", args[0])
+		fmt.Println("Clicked:", selector)
 
 	case "type":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: type <selector> <text>")
+			fmt.Fprintln(os.Stderr, "Usage: type <selector or index> <text>")
 			return 1
 		}
+		selector := args[0]
+		if idx, err := strconv.Atoi(selector); err == nil {
+			sel, err := selectorForIndex(idx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return 1
+			}
+			selector = sel
+		}
 		text := strings.Join(args[1:], " ")
-		if err := page.Type(args[0], text); err != nil {
+		if err := page.Type(selector, text); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		fmt.Printf("Typed %q into %s\n", text, args[0])
+		fmt.Printf("Typed %q into %s\n", text, selector)
 
 	case "screenshot":
 		file := "screenshot.png"
@@ -194,6 +223,7 @@ func runCommand(cmd string, args []string) int {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
+		lastState = state
 		fmt.Printf("URL:   %s\nTitle: %s\nElements: %d\nScroll: %.0f%%\n\n",
 			state.URL, state.Title, len(state.Elements), state.ScrollPosition)
 		fmt.Println(state.Tree)
@@ -373,12 +403,12 @@ func printHelp() {
     tabs                    List open tabs
 
   Interaction:
-    click <selector>        Click an element by CSS selector
-    type <selector> <text>  Type text into an element
+    click <selector|index>  Click by CSS selector or state index (e.g. click 56)
+    type <selector|index> <text>  Type text by selector or index
     eval <js>               Evaluate JavaScript expression
 
   Extraction:
-    state                   Show indexed DOM state (what the AI agent sees)
+    state                   Show indexed DOM state (run before click/type by index)
     text <selector>         Get text content of element
     html                    Get full page HTML
     screenshot [file]       Save screenshot (default: screenshot.png)
@@ -436,6 +466,22 @@ func splitArgs(line string) []string {
 		args = append(args, current.String())
 	}
 	return args
+}
+
+// selectorForIndex looks up the CSS selector for a DOM element index from the last state.
+func selectorForIndex(idx int) (string, error) {
+	if lastState == nil {
+		return "", fmt.Errorf("run 'state' first to index page elements")
+	}
+	for _, el := range lastState.Elements {
+		if el.Index == idx {
+			if el.CSSSelector == "" {
+				return "", fmt.Errorf("element [%d] has no CSS selector", idx)
+			}
+			return el.CSSSelector, nil
+		}
+	}
+	return "", fmt.Errorf("element [%d] not found (max index: %d)", idx, len(lastState.Elements)-1)
 }
 
 func truncateCLI(s string, max int) string {
