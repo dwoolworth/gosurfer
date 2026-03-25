@@ -893,16 +893,52 @@ const focusedDOMExtractionScript = `() => {
 	}
 
 	// Prefer content regions if they exist
-	const contentRoot = document.querySelector('main, [role="main"], article, #content, .content')
-		|| document.body;
-	walk(contentRoot, 0, 50);
+	const contentSelectors = [
+		'main', '[role="main"]', 'article',
+		'#main-content', '#content', '#page-content',
+		'.main-content', '.content', '.page-content',
+		'.main', '#main', '.site-content', '.page-wrapper'
+	];
+	let contentRoot = null;
+	for (const sel of contentSelectors) {
+		const el = document.querySelector(sel);
+		if (el && el.children.length > 0) {
+			contentRoot = el;
+			break;
+		}
+	}
 
-	// If we got very few elements from the content region, fall back to body
-	if (elements.length < 3 && contentRoot !== document.body) {
+	if (contentRoot) {
+		walk(contentRoot, 0, 50);
+	}
+
+	// If no content region found or it yielded too few elements,
+	// walk the full body but still filter boilerplate
+	if (!contentRoot || elements.length < 3) {
 		elements.length = 0;
 		nodes.length = 0;
 		idx = 0;
 		walk(document.body, 0, 50);
+	}
+
+	// If STILL too few elements, the boilerplate filter may be too aggressive.
+	// Re-walk with only tag-based boilerplate detection (no class/ID patterns).
+	if (elements.length < 5) {
+		elements.length = 0;
+		nodes.length = 0;
+		idx = 0;
+		// Temporarily relax boilerplate detection
+		const origIsBoilerplate = isBoilerplate;
+		isBoilerplate = function(el) {
+			// Only strip by tag name, not class/ID patterns
+			const tag = el.tagName.toLowerCase();
+			if (BOILERPLATE_TAGS.has(tag)) return true;
+			const role = el.getAttribute('role');
+			if (role && BOILERPLATE_ROLES.has(role)) return true;
+			return false;
+		};
+		walk(document.body, 0, 50);
+		isBoilerplate = origIsBoilerplate;
 	}
 
 	// Second pass: extract internal navigation links from boilerplate regions
