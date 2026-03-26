@@ -748,4 +748,4 @@ go test -timeout 180s ./...
 
 ## License
 
-MIT License. Concept and design by [Derrick Woolworth](https://github.com/dwoolworth). Implementation by [Claude](https://claude.ai) (Anthropic).
+MIT License. Concept and design by [Derrick Woolworth](https://github.com/dwoolworth).
