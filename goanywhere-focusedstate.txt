@@ -1,0 +1,118 @@
+URL:   https://www.goanywhere.com/
+Title: Secure File Transfer Software for the Enterprise | GoAnywhere MFT
+Elements: 94 (focused)
+Scroll: 0%
+
+                        Image
+                    ## Meet File Transfer Needs with GoAnywhere MFT
+                    GoAnywhere MFT, a leading secure managed file transfer (SFT) software solution, helps organizations automatically and se...
+                      [0]<a href="/trial">Launch Trial</a>
+                ## GoAnywhere MFT Delivers Security and Flexibility
+                        ### Multi-Platform and Environment Flexibility
+                              GoAnywhere works where and how you need it: whether it’s on-premises, cloud, hybrid or SaaS.
+                        ### Encrypt Sensitive Files in Motion and at Rest
+                              GoAnywhere lets you choose the secure protocols you and your trading partners need, including HTTPS, SFTP, and FTPS.
+                        ### Automate and Streamline with Triggers and Scheduling
+                              Utilize secure workflows to easily automate and streamline your entire file transfer process.
+                        ### Meet Stringent Compliance Requirements
+                              Strong encryption technology, authentication, and enterprise-level features help support HIPAA, PCI DSS, GDPR, and other...
+                        ### File Acceleration
+                              With FileCatalyst Service in GoAnywhere, files can be transferred at speeds up to 10 times faster (or more) than with tr...
+                    [1]<a href="/trial" title="GoAnywhere MFT Trial - CTA - VWO Split URL Test Control">Start a Free Trial</a>
+                              GoAnywhere MFT allowed us to eliminate and reduce the need for custom programming to transfer files and database records...
+                              Van N. Sy, Vice President
+                    Text
+                              Image
+                              Image
+                              Image
+                ## A Trusted Leader in the File Transfer Field
+                        Image
+                      4.5/5
+                        Image
+                      [2]<a href="https://www.gartner.com/reviews/product/goanywhere-managed-file-transfer">Read Reviews</a>
+                        Image
+                      4.6/5
+                        Image
+                      [3]<a href="https://www.g2.com/products/goanywhere-mft/reviews">Read Reviews</a>
+                        Image
+                      4.8/5
+                        Image
+                      [4]<a href="https://www.capterra.com/p/158210/GoAnywhere-MFT/">Read Reviews</a>
+                ## Latest From Our Blog
+                                    [5]<a href="/blog/file-transfer-critical-infrastructure-lessons-security-teams-cant-ignore">25 Mar, 2026 File Transfer as Critical Infrastructure: Lessons Security Teams Ca...</a>
+                                      File Transfer as Critical Infrastructure: Lessons Security Teams Can’t Ignore
+                                    [12]<a href="/blog/why-security-teams-are-re-evaluating-their-mft-platforms">13 Mar, 2026 Why Security Teams are Re-Evaluating Their MFT Platforms Read More</a>
+                                    [19]<a href="/blog/accelerated-file-transfers-scale-how-meet-enterprise-performance-demands">4 Mar, 2026 Accelerated File Transfers at Scale: How to Meet Enterprise Performa...</a>
+                                      Accelerated File Transfers at Scale: How to Meet Enterprise Performance Demands
+                ### Secure Your File Movement with GoAnywhere
+                Download a free 30-day trial and see if Fortra's GoAnywhere is the right solution for your organization.
+                  [26]<a href="/trial">Get Started</a>
+## Site Navigation
+  [27]<a href="/">English</a>
+  [28]<a href="/es">Spanish</a>
+  [29]<a href="/de">German</a>
+  [30]<a href="/fr">French</a>
+  [31]<a href="https://my.goanywhere.com/webclient/Login.xhtml">Login</a>
+  [32]<a href="/support">Support</a>
+  [33]<a href="/about">Company</a>
+  [34]<a href="/demo">Request Demo</a>
+  [35]<a href="/products/goanywhere-mft">Managed File Transfer</a>
+  [36]<a href="/products/mftaas">MFTaaS</a>
+  [37]<a href="/products/goanywhere-gateway">Gateway</a>
+  [38]<a href="/products/threat-protection">Threat Protection</a>
+  [39]<a href="/products/goanywhere-free/efss">File Sync & Sharing</a>
+  [40]<a href="/products/open-pgp-studio">Open PGP Studio</a>
+  [41]<a href="/products/filecatalyst">FileCatalyst</a>
+  [42]<a href="/products/zero-trust-file-transfer">Zero Trust File Transfer</a>
+  [43]<a href="/products">View all products</a>
+  [44]<a href="/solutions/managed-file-transfer">Managed File Transfer</a>
+  [45]<a href="/solutions/cloud-file-transfer">Cloud File Transfer</a>
+  [46]<a href="/solutions/secure-ftp">Secure FTP</a>
+  [47]<a href="/solutions/as2-transfers">AS2 Transfers</a>
+  [48]<a href="/solutions/open-pgp">Open PGP Encryption</a>
+  [49]<a href="/solutions/file-sharing">Sharing & Collaboration</a>
+  [50]<a href="/solutions/automation">File Transfer Automation</a>
+  [51]<a href="/solutions/data-security">Data Security</a>
+  [52]<a href="/solutions/compliance">Compliance</a>
+  [53]<a href="/solutions/fast-file-transfer">Fast File Transfer</a>
+  [54]<a href="/solutions/file-encryption">File Encryption</a>
+  [55]<a href="/solutions/send-large-files">Large File Transfer</a>
+  [56]<a href="/solutions/secure-file-transfer">Secure File Transfer</a>
+  [57]<a href="/services">Services</a>
+  [58]<a href="/solutions">View all solutions</a>
+  [59]<a href="/resources?f%5B0%5D=product%3A29&f%5B1%5D=type%3A53">Case Studies</a>
+  [60]<a href="/resources?f%5B0%5D=type%3A56">Guides</a>
+  [61]<a href="/resources?f%5B0%5D=type%3A62">Product Videos</a>
+  [62]<a href="/resources?f%5B0%5D=topic%3A15&f%5B1%5D=type%3A50">Tutorials</a>
+  [63]<a href="/products/goanywhere-mft/use-cases">Use Cases</a>
+  [64]<a href="/products/goanywhere-mft/customer-love">What Customers are Saying</a>
+  [65]<a href="/resources?f%5B0%5D=topic%3A15&f%5B1%5D=type%3A61">Webinars</a>
+  [66]<a href="/blog">Blog</a>
+  [67]<a href="/industries">Industries</a>
+  [68]<a href="/security/trust">Security Trust Center</a>
+  [69]<a href="/resources">View all resources</a>
+  [70]<a href="/platforms/microsoft-azure">Microsoft Azure</a>
+  [71]<a href="/platforms/windows">Windows</a>
+  [72]<a href="/platforms/docker">Docker</a>
+  [73]<a href="/platforms/amazon-ec2">Amazon EC2</a>
+  [74]<a href="/platforms/linux">Linux</a>
+  [75]<a href="/platforms/ibm-i">IBM i</a>
+  [76]<a href="/platforms/vmware">VMware</a>
+  [77]<a href="/platforms/aix-unix">AIX & UNIX</a>
+  [78]<a href="/platforms">View all platforms</a>
+  [79]<a href="/pricing">Pricing</a>
+  [80]<a href="tel:+1 800-328-1000">+1 800-328-1000</a>
+  [81]<a href="/about/certifications-partnerships">Certifications & Partnerships</a>
+  [82]<a href="/resources?f%5B0%5D=type%3A60">Upcoming Events</a>
+  [83]<a href="https://www.fortra.com/about/newsroom">Newsroom</a>
+  [84]<a href="/about/customers">Our Customers</a>
+  [85]<a href="https://www.goanywhere.com/what-users-love-about-goanywhere">What Customers are Saying</a>
+  [86]<a href="mailto:info@fortra.com?subject=goanywhere-website">info@fortra.com</a>
+  [87]<a href="/products/fortra">Fortra Products</a>
+  [88]<a href="https://hstechdocs.helpsystems.com/releasenotes/Content/_ProductPages/GoAnywhere/GAMFT.htm">Release Notes</a>
+  [89]<a href="https://www.goanywhere.com/products/filecatalyst">FIleCatalyst</a>
+  [90]<a href="/glossary">SFT Glossary</a>
+  [91]<a href="/products/goanywhere-mft/roi-calculator">ROI of Secure File Transfer</a>
+  [92]<a href="/blog/subscribe">Subscribe to the Blog</a>
+  [93]<a href="https://www.fortra.com/impressum">Impressum</a>
+
