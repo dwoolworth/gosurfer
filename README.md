@@ -538,6 +538,98 @@ Commands: `open`, `click`, `type`, `screenshot`, `pdf`, `state`, `eval`, `cookie
 
 Set `GOSURFER_HEADLESS=false` to see the browser window, `GOSURFER_STEALTH=true` for anti-detection mode.
 
+## MCP Server
+
+gosurfer includes an MCP (Model Context Protocol) server that exposes browser automation as tools for AI agents. Agents connect over HTTP+SSE and browse the web without managing browsers.
+
+```bash
+# Install
+go install github.com/dwoolworth/gosurfer/cmd/gosurfer-mcp@latest
+
+# Run
+BRAVE_API_KEY=your-key gosurfer-mcp
+# Listening on http://localhost:8080/mcp
+```
+
+### Tools
+
+| Tool | Browser? | Description |
+|------|----------|-------------|
+| `search` | No | Web search via Brave Search API — fast and cheap, no Chrome needed |
+| `browse` | Yes | Navigate to URL, return focused content (boilerplate stripped, markdown headings, token-efficient) |
+| `browse_full` | Yes | Navigate to URL, return complete DOM state with all interactive elements indexed |
+| `screenshot` | Yes | Navigate to URL, capture PNG (viewport or full page) |
+| `interact` | Yes | Navigate to URL, execute an action sequence (click, type, scroll, wait), return final state |
+| `extract` | Yes | Navigate to URL, evaluate JavaScript, return structured data |
+| `pdf` | Yes | Navigate to URL, generate PDF |
+
+### Stateless Design
+
+Each tool call creates a fresh Chrome tab, does its work, and closes the tab. No session state between calls — any instance can handle any request, making it trivially scalable behind a load balancer.
+
+### Configuration
+
+| Environment Variable | Default | Purpose |
+|---------------------|---------|---------|
+| `MCP_PORT` | `8080` | HTTP listen port |
+| `BRAVE_API_KEY` | required | Brave Search API key (for `search` tool) |
+| `GOSURFER_PROXY` | none | HTTP/SOCKS proxy for all browser traffic |
+| `GOSURFER_PROFILE` | none | Chrome profile directory (persists login state) |
+| `GOSURFER_HUMAN` | `true` | HumanMode: system Chrome + new headless + stealth |
+| `GOSURFER_HEADLESS` | `true` | Set `false` to show browser window |
+
+### Example: Connect from Claude Desktop
+
+Add to your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "gosurfer": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+### Example: `interact` Tool
+
+Fill a form and submit it in a single call:
+
+```json
+{
+  "name": "interact",
+  "arguments": {
+    "url": "https://example.com/login",
+    "actions": "[{\"action\":\"type\",\"selector\":\"#email\",\"text\":\"user@test.com\"},{\"action\":\"type\",\"selector\":\"#password\",\"text\":\"secret\"},{\"action\":\"click\",\"selector\":\"#submit\"},{\"action\":\"wait\",\"seconds\":2}]"
+  }
+}
+```
+
+Returns the final page state after all actions execute — the agent sees the result without needing multiple round trips.
+
+### Containerized Deployment
+
+```dockerfile
+FROM golang:1.23-alpine AS builder
+RUN apk add --no-cache git upx
+RUN go install github.com/dwoolworth/gosurfer/cmd/gosurfer-mcp@latest \
+    && cp /go/bin/gosurfer-mcp /gosurfer-mcp \
+    && upx --best --lzma /gosurfer-mcp
+
+FROM alpine:3.20
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+RUN adduser -D -u 1000 surfer
+COPY --from=builder /gosurfer-mcp /home/surfer/gosurfer-mcp
+USER surfer
+WORKDIR /home/surfer
+ENV CHROME_BIN=/usr/bin/chromium-browser GOSURFER_HUMAN=true MCP_PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["./gosurfer-mcp"]
+```
+
+Run multiple instances behind a load balancer for horizontal scaling. Each instance manages its own Chrome process and can handle concurrent requests.
+
 ## Docker
 
 ```dockerfile
@@ -591,7 +683,8 @@ gosurfer
 ├── auth.go         Storage state save/restore for auth persistence
 ├── emulation.go    Device, viewport, geolocation, timezone, network emulation
 ├── prompt.go       Agent system prompt generation
-└── cmd/gosurfer/   CLI entry point
+├── cmd/gosurfer/   CLI entry point
+└── cmd/gosurfer-mcp/  MCP server for AI agents (HTTP+SSE)
 ```
 
 ### How the Agent Works
