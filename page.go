@@ -18,12 +18,43 @@ type Page struct {
 	dom     *DOMService
 }
 
-// Navigate loads a URL and waits for the page to be ready.
+// defaultChallengeWaitTimeout is used by Navigate when the browser config
+// does not set an explicit ChallengeWaitTimeout. Cloudflare's UAM JS
+// challenge typically resolves in 5-15 seconds; 15s gives us headroom.
+const defaultChallengeWaitTimeout = 15 * time.Second
+
+// Navigate loads a URL and waits for the page to be ready. If the page is
+// served a bot-protection challenge that can be auto-solved (e.g.,
+// Cloudflare's "Just a moment..." JavaScript challenge), Navigate will
+// poll until the challenge clears or the configured timeout elapses.
+// Non-auto-solvable challenges (Cloudflare Turnstile, DataDome) return an
+// error so callers fail fast with a meaningful message instead of silently
+// returning the challenge page as "real" content.
 func (p *Page) Navigate(url string) error {
 	if err := p.rod.Navigate(url); err != nil {
 		return fmt.Errorf("gosurfer: navigate: %w", err)
 	}
-	return p.rod.WaitLoad()
+	if err := p.rod.WaitLoad(); err != nil {
+		return fmt.Errorf("gosurfer: wait load: %w", err)
+	}
+
+	// Determine the wait timeout. 0 means "use default", -1 means disabled.
+	timeout := defaultChallengeWaitTimeout
+	if p.browser != nil {
+		switch t := p.browser.config.ChallengeWaitTimeout; {
+		case t < 0:
+			timeout = 0
+		case t > 0:
+			timeout = t
+		}
+	}
+
+	if timeout > 0 {
+		if _, _, err := p.WaitForChallenge(timeout); err != nil {
+			return fmt.Errorf("gosurfer: navigate: %w", err)
+		}
+	}
+	return nil
 }
 
 // Back navigates backward in history.

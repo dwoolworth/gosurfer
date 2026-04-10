@@ -15,6 +15,7 @@ package gosurfer
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -59,6 +60,12 @@ type BrowserConfig struct {
 
 	// BlockedDomains prevents navigation to these domains (glob patterns).
 	BlockedDomains []string
+
+	// ChallengeWaitTimeout controls how long Navigate() waits for an
+	// auto-solvable bot-protection challenge (e.g., Cloudflare's "Just a
+	// moment..." JS challenge) to clear. If 0, the default of 15s is used.
+	// Set to -1 to disable auto-waiting entirely.
+	ChallengeWaitTimeout time.Duration
 }
 
 // Browser wraps a Chrome/Chromium instance.
