@@ -31,48 +31,76 @@ func (c ChallengeType) IsAutoSolvable() bool {
 }
 
 // detectChallengeJS is a JavaScript snippet that inspects the current document
-// and returns a string identifying any bot-protection challenge in progress.
-// Returned as a simple string so the eval call stays cheap.
+// and returns a string identifying any bot-protection challenge currently
+// blocking access to the page content.
 //
-// Detection order matters: DataDome must be checked BEFORE Cloudflare
-// challenge markers because DataDome pages legitimately include Cloudflare
-// CDN attributes (data-cfasync, cdn-cgi scripts) without actually being
-// protected by a Cloudflare challenge.
+// Detection philosophy: distinguish "challenge is blocking me" from
+// "challenge scripts are loaded but content is rendered fine". Many
+// legitimate sites load DataDome, Turnstile, or Cloudflare challenge
+// scripts as background protection WITHOUT actually blocking the user —
+// we must not classify those as challenges.
+//
+// The heuristic:
+//  1. Check title for unambiguous challenge markers ("Just a moment...").
+//  2. If the body has substantial text content (>250 chars), the page
+//     loaded successfully — return no challenge even if protection
+//     scripts are detected in HTML.
+//  3. Only for empty/near-empty pages, fall back to HTML string
+//     matching to identify which protection is active.
 const detectChallengeJS = `() => {
   try {
     const title = (document.title || "").toLowerCase();
-    const bodyText = (document.body && document.body.innerText || "").toLowerCase();
-    const html = document.documentElement.outerHTML || "";
+    const bodyEl = document.body;
+    const bodyText = (bodyEl && bodyEl.innerText || "").trim();
+    const bodyLen = bodyText.length;
 
-    // --- 1. DataDome (captcha-delivery.com) — checked first because ---
-    // DataDome pages often ride on top of Cloudflare CDN infrastructure.
-    if (html.indexOf("captcha-delivery.com") !== -1 ||
-        html.indexOf("geo.captcha-delivery.com") !== -1 ||
-        html.indexOf("datadome") !== -1 ||
-        html.indexOf("window.dd=") !== -1 ||
-        html.indexOf("var dd={") !== -1) {
+    // --- 1. Unambiguous title markers (always blocking) ---
+    if (title === "just a moment..." || title === "just a moment" ||
+        title.startsWith("attention required") ||
+        title === "one more step") {
+      return "cloudflare_uam";
+    }
+    if (title === "datadome captcha" || title.indexOf("datadome") !== -1) {
       return "datadome";
     }
 
-    // --- 2. Cloudflare Turnstile (interactive widget) ---
-    // Only match the specific widget class, NOT the generic "turnstile"
-    // word which can appear in unrelated library names or telemetry.
-    if (html.indexOf("cf-turnstile") !== -1 ||
-        html.indexOf("class=\"cf-turnstile") !== -1) {
-      return "cloudflare_turnstile";
+    // --- 2. Substantial body content = NOT blocked ---
+    // If the page rendered real text, it's loaded regardless of what
+    // background scripts are present. This prevents false positives on
+    // legitimate sites that load Turnstile/DataDome as invisible
+    // protection (Kiteworks, cloudflare.com, etc.).
+    if (bodyLen > 250) {
+      return "";
     }
 
-    // --- 3. Cloudflare UAM / "Just a moment..." JS challenge ---
-    // Title is the most reliable signal.
-    if (title === "just a moment..." || title === "just a moment" ||
-        title.startsWith("attention required") ||
-        bodyText.indexOf("checking if the site connection is secure") !== -1 ||
-        bodyText.indexOf("checking your browser before accessing") !== -1) {
+    // --- 3. Empty/near-empty body: check HTML for specific protection ---
+    const html = document.documentElement.outerHTML || "";
+    const bodyTextLower = bodyText.toLowerCase();
+
+    // Cloudflare UAM body markers (for mid-challenge state).
+    if (bodyTextLower.indexOf("checking if the site connection is secure") !== -1 ||
+        bodyTextLower.indexOf("checking your browser before accessing") !== -1 ||
+        bodyTextLower.indexOf("verify you are human") !== -1) {
       return "cloudflare_uam";
     }
 
-    // Cloudflare challenge markup even if the title was already rewritten.
-    // Use very specific paths that only appear on actual challenge pages.
+    // DataDome: specific runtime-injected signatures rather than generic
+    // script src. "var dd={" is the DataDome challenge config object;
+    // "geo.captcha-delivery.com" is DataDome's challenge host.
+    if (html.indexOf("var dd={") !== -1 ||
+        html.indexOf("geo.captcha-delivery.com") !== -1) {
+      return "datadome";
+    }
+
+    // Cloudflare Turnstile: ONLY when it's the only thing on the page
+    // (empty body means no surrounding content to read).
+    if (html.indexOf('class="cf-turnstile') !== -1 ||
+        html.indexOf("'cf-turnstile'") !== -1 ||
+        html.indexOf("cf-turnstile-wrapper") !== -1) {
+      return "cloudflare_turnstile";
+    }
+
+    // Cloudflare challenge-platform markup on an empty page.
     if (html.indexOf("/cdn-cgi/challenge-platform/h/") !== -1 ||
         html.indexOf("_cf_chl_opt") !== -1 ||
         html.indexOf("cf-im-under-attack") !== -1) {

@@ -20,8 +20,10 @@ type Page struct {
 
 // defaultChallengeWaitTimeout is used by Navigate when the browser config
 // does not set an explicit ChallengeWaitTimeout. Cloudflare's UAM JS
-// challenge typically resolves in 5-15 seconds; 15s gives us headroom.
-const defaultChallengeWaitTimeout = 15 * time.Second
+// challenge typically resolves in 5-15 seconds, but under load or
+// aggressive fingerprinting it can take up to ~25 seconds; 30s gives
+// enough headroom while still failing fast on genuinely stuck challenges.
+const defaultChallengeWaitTimeout = 30 * time.Second
 
 // Navigate loads a URL and waits for the page to be ready. If the page is
 // served a bot-protection challenge that can be auto-solved (e.g.,

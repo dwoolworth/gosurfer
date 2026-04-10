@@ -28,9 +28,10 @@ func TestChallengeType_IsAutoSolvable(t *testing.T) {
 // and accidentally removes a pattern, this test catches it.
 func TestDetectChallengeJS_ContainsExpectedPatterns(t *testing.T) {
 	required := []string{
-		// DataDome (checked FIRST)
-		"captcha-delivery.com",
-		"datadome",
+		// Body-length guard against false positives
+		"bodyLen > 250",
+		// DataDome specific signatures
+		"geo.captcha-delivery.com",
 		"var dd={",
 		// Cloudflare Turnstile — only specific widget class
 		"cf-turnstile",
