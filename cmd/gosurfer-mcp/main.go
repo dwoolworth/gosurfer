@@ -206,9 +206,12 @@ func launchBrowser() error {
 }
 
 // withPage acquires a page from the pool, runs the function, and releases
-// the page. It respects context cancellation and enforces the tool timeout.
+// the page. It respects context cancellation, enforces the tool timeout,
+// and logs the request outcome (with credentials stripped from the URL).
 // If the pool is exhausted, it returns a fast error rather than hanging.
-func withPage(ctx context.Context, fn func(page *gosurfer.Page) (*mcp.CallToolResult, error)) (*mcp.CallToolResult, error) {
+func withPage(ctx context.Context, toolName, rawURL string, fn func(page *gosurfer.Page) (*mcp.CallToolResult, error)) (*mcp.CallToolResult, error) {
+	start := time.Now()
+
 	// Derive a context with the tool timeout so both pool acquisition and
 	// the work itself share the same deadline.
 	workCtx, cancel := context.WithTimeout(ctx, toolTimeout)
@@ -216,13 +219,15 @@ func withPage(ctx context.Context, fn func(page *gosurfer.Page) (*mcp.CallToolRe
 
 	page, release, err := pagePool.Acquire(workCtx)
 	if err != nil {
+		elapsed := time.Since(start).Milliseconds()
 		if errors.Is(err, ErrPoolExhausted) {
 			stats := pagePool.Stats()
-			return mcp.NewToolResultErrorf(
-				"browser pool exhausted: %d/%d slots busy. Retry later or reduce concurrent browsing.",
-				stats.Busy, stats.MaxPages,
-			), nil
+			msg := fmt.Sprintf("browser pool exhausted: %d/%d slots busy. Retry later or reduce concurrent browsing.",
+				stats.Busy, stats.MaxPages)
+			logRequest(toolName, rawURL, "pool_exhausted", elapsed, msg)
+			return mcp.NewToolResultError(msg), nil
 		}
+		logRequest(toolName, rawURL, "error", elapsed, "acquire page: "+err.Error())
 		return mcp.NewToolResultError("acquire page: " + err.Error()), nil
 	}
 	defer release()
@@ -239,11 +244,40 @@ func withPage(ctx context.Context, fn func(page *gosurfer.Page) (*mcp.CallToolRe
 
 	select {
 	case <-done:
+		elapsed := time.Since(start).Milliseconds()
+		status := "ok"
+		errMsg := ""
+		if fnErr != nil {
+			status = "error"
+			errMsg = fnErr.Error()
+		} else if result != nil && result.IsError {
+			// The tool function returned an MCP error result (e.g., navigation
+			// failed). These come back as normal returns but signal failure.
+			status = "error"
+			errMsg = extractErrorText(result)
+		}
+		logRequest(toolName, rawURL, status, elapsed, errMsg)
 		return result, fnErr
 	case <-workCtx.Done():
 		pagePool.RecordTimeout()
-		return mcp.NewToolResultErrorf("request timed out after %s", toolTimeout), nil
+		elapsed := time.Since(start).Milliseconds()
+		msg := fmt.Sprintf("request timed out after %s", toolTimeout)
+		logRequest(toolName, rawURL, "timeout", elapsed, msg)
+		return mcp.NewToolResultError(msg), nil
 	}
+}
+
+// extractErrorText pulls the error message out of an MCP tool result for logging.
+func extractErrorText(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, c := range result.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			return tc.Text
+		}
+	}
+	return "tool returned error"
 }
 
 // normalizeURL adds https:// if no scheme is present.
@@ -339,6 +373,7 @@ func registerTools(s *server.MCPServer) {
 // --- Tool Handlers ---
 
 func handleSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
 	query := getStringArg(req, "query")
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
@@ -351,10 +386,19 @@ func handleSearch(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 		count = 20
 	}
 
+	// Log the query itself (not a URL) — truncate so pod logs don't balloon.
+	queryPreview := query
+	if len(queryPreview) > 120 {
+		queryPreview = queryPreview[:120] + "..."
+	}
+
 	result, err := braveSearch(ctx, query, count)
+	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
+		logRequest("search", "query="+queryPreview, "error", elapsed, err.Error())
 		return mcp.NewToolResultError("search failed: " + err.Error()), nil
 	}
+	logRequest("search", "query="+queryPreview, "ok", elapsed, "")
 	return mcp.NewToolResultText(result), nil
 }
 
@@ -364,7 +408,7 @@ func handleBrowse(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 		return mcp.NewToolResultError("url is required"), nil
 	}
 
-	return withPage(ctx, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
+	return withPage(ctx, "browse", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
 		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
 			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
 		}
@@ -384,7 +428,7 @@ func handleBrowseFull(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError("url is required"), nil
 	}
 
-	return withPage(ctx, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
+	return withPage(ctx, "browse_full", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
 		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
 			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
 		}
@@ -405,7 +449,7 @@ func handleScreenshot(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 	fullPage := getBoolArg(req, "full_page")
 
-	return withPage(ctx, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
+	return withPage(ctx, "screenshot", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
 		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
 			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
 		}
@@ -443,7 +487,7 @@ func handleInteract(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 		return mcp.NewToolResultError("invalid actions JSON: " + err.Error()), nil
 	}
 
-	return withPage(ctx, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
+	return withPage(ctx, "interact", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
 		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
 			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
 		}
@@ -522,7 +566,7 @@ func handleExtract(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		js = "() => " + js
 	}
 
-	return withPage(ctx, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
+	return withPage(ctx, "extract", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
 		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
 			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
 		}
@@ -554,7 +598,7 @@ func handlePDF(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResul
 		return mcp.NewToolResultError("url is required"), nil
 	}
 
-	return withPage(ctx, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
+	return withPage(ctx, "pdf", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
 		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
 			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
 		}
