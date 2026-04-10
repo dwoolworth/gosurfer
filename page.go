@@ -27,9 +27,13 @@ const defaultChallengeWaitTimeout = 15 * time.Second
 // served a bot-protection challenge that can be auto-solved (e.g.,
 // Cloudflare's "Just a moment..." JavaScript challenge), Navigate will
 // poll until the challenge clears or the configured timeout elapses.
-// Non-auto-solvable challenges (Cloudflare Turnstile, DataDome) return an
-// error so callers fail fast with a meaningful message instead of silently
-// returning the challenge page as "real" content.
+//
+// Navigate does NOT return an error when the page lands on a
+// non-auto-solvable challenge (Turnstile, DataDome) — the page did load,
+// it just loaded a challenge. Callers who want to fail fast in that case
+// should call DetectChallenge() after Navigate and check the return value.
+// Only an auto-solvable challenge that fails to clear within the timeout
+// produces an error.
 func (p *Page) Navigate(url string) error {
 	if err := p.rod.Navigate(url); err != nil {
 		return fmt.Errorf("gosurfer: navigate: %w", err)

@@ -205,6 +205,47 @@ func launchBrowser() error {
 	return nil
 }
 
+// navigateAndCheck navigates the page to the given URL and then checks
+// for any bot-protection challenge. Returns a ready-to-return MCP error
+// result if navigation failed or the page is on a non-auto-solvable
+// challenge; returns nil to indicate the caller should continue.
+func navigateAndCheck(page *gosurfer.Page, url string) *mcp.CallToolResult {
+	if err := page.Navigate(url); err != nil {
+		return mcp.NewToolResultError("navigation failed: " + err.Error())
+	}
+	return checkPageChallenge(page)
+}
+
+// checkPageChallenge inspects the page for bot-protection challenges after
+// navigation and returns a clear error MCP result if the page is sitting
+// on a non-auto-solvable challenge (DataDome, Cloudflare Turnstile). This
+// prevents callers from treating an empty/obscured challenge page as real
+// content. Returns nil if the page has no challenge (i.e., proceed).
+func checkPageChallenge(page *gosurfer.Page) *mcp.CallToolResult {
+	ct, err := page.DetectChallenge()
+	if err != nil {
+		// Detection itself errored (e.g., page torn down) — don't block.
+		return nil
+	}
+	switch ct {
+	case gosurfer.ChallengeNone, gosurfer.ChallengeCloudflareUAM:
+		// Either no challenge, or UAM that Navigate already waited through
+		// successfully. Proceed to the tool function.
+		return nil
+	case gosurfer.ChallengeDataDome:
+		return mcp.NewToolResultError(
+			"blocked by DataDome bot protection (captcha-delivery.com). " +
+				"DataDome uses aggressive fingerprint-based detection and cannot " +
+				"currently be bypassed by this tool. Try a different source.")
+	case gosurfer.ChallengeCloudflareTurnstile:
+		return mcp.NewToolResultError(
+			"blocked by Cloudflare Turnstile (interactive challenge). " +
+				"Turnstile requires user interaction and cannot be auto-solved.")
+	default:
+		return mcp.NewToolResultErrorf("blocked by bot protection: %s", ct)
+	}
+}
+
 // withPage acquires a page from the pool, runs the function, and releases
 // the page. It respects context cancellation, enforces the tool timeout,
 // and logs the request outcome (with credentials stripped from the URL).
@@ -409,8 +450,8 @@ func handleBrowse(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	}
 
 	return withPage(ctx, "browse", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
-		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
-			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
+		if errResult := navigateAndCheck(page, normalizeURL(rawURL)); errResult != nil {
+			return errResult, nil
 		}
 		state, err := page.FocusedDOMState()
 		if err != nil {
@@ -429,8 +470,8 @@ func handleBrowseFull(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	return withPage(ctx, "browse_full", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
-		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
-			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
+		if errResult := navigateAndCheck(page, normalizeURL(rawURL)); errResult != nil {
+			return errResult, nil
 		}
 		state, err := page.DOMState()
 		if err != nil {
@@ -450,8 +491,8 @@ func handleScreenshot(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	fullPage := getBoolArg(req, "full_page")
 
 	return withPage(ctx, "screenshot", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
-		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
-			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
+		if errResult := navigateAndCheck(page, normalizeURL(rawURL)); errResult != nil {
+			return errResult, nil
 		}
 
 		var png []byte
@@ -488,8 +529,8 @@ func handleInteract(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	}
 
 	return withPage(ctx, "interact", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
-		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
-			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
+		if errResult := navigateAndCheck(page, normalizeURL(rawURL)); errResult != nil {
+			return errResult, nil
 		}
 
 		// Execute actions sequentially
@@ -567,8 +608,8 @@ func handleExtract(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	}
 
 	return withPage(ctx, "extract", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
-		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
-			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
+		if errResult := navigateAndCheck(page, normalizeURL(rawURL)); errResult != nil {
+			return errResult, nil
 		}
 
 		val, err := page.Eval(js)
@@ -599,8 +640,8 @@ func handlePDF(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResul
 	}
 
 	return withPage(ctx, "pdf", rawURL, func(page *gosurfer.Page) (*mcp.CallToolResult, error) {
-		if err := page.Navigate(normalizeURL(rawURL)); err != nil {
-			return mcp.NewToolResultError("navigation failed: " + err.Error()), nil
+		if errResult := navigateAndCheck(page, normalizeURL(rawURL)); errResult != nil {
+			return errResult, nil
 		}
 
 		pdfBytes, err := page.PDF()

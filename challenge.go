@@ -33,41 +33,50 @@ func (c ChallengeType) IsAutoSolvable() bool {
 // detectChallengeJS is a JavaScript snippet that inspects the current document
 // and returns a string identifying any bot-protection challenge in progress.
 // Returned as a simple string so the eval call stays cheap.
+//
+// Detection order matters: DataDome must be checked BEFORE Cloudflare
+// challenge markers because DataDome pages legitimately include Cloudflare
+// CDN attributes (data-cfasync, cdn-cgi scripts) without actually being
+// protected by a Cloudflare challenge.
 const detectChallengeJS = `() => {
   try {
     const title = (document.title || "").toLowerCase();
     const bodyText = (document.body && document.body.innerText || "").toLowerCase();
     const html = document.documentElement.outerHTML || "";
 
-    // Cloudflare "Just a moment..." / "Checking your browser"
-    // Title is the most reliable signal for UAM.
+    // --- 1. DataDome (captcha-delivery.com) — checked first because ---
+    // DataDome pages often ride on top of Cloudflare CDN infrastructure.
+    if (html.indexOf("captcha-delivery.com") !== -1 ||
+        html.indexOf("geo.captcha-delivery.com") !== -1 ||
+        html.indexOf("datadome") !== -1 ||
+        html.indexOf("window.dd=") !== -1 ||
+        html.indexOf("var dd={") !== -1) {
+      return "datadome";
+    }
+
+    // --- 2. Cloudflare Turnstile (interactive widget) ---
+    // Only match the specific widget class, NOT the generic "turnstile"
+    // word which can appear in unrelated library names or telemetry.
+    if (html.indexOf("cf-turnstile") !== -1 ||
+        html.indexOf("class=\"cf-turnstile") !== -1) {
+      return "cloudflare_turnstile";
+    }
+
+    // --- 3. Cloudflare UAM / "Just a moment..." JS challenge ---
+    // Title is the most reliable signal.
     if (title === "just a moment..." || title === "just a moment" ||
         title.startsWith("attention required") ||
         bodyText.indexOf("checking if the site connection is secure") !== -1 ||
         bodyText.indexOf("checking your browser before accessing") !== -1) {
-      // Distinguish UAM (auto-resolving) from Turnstile (interactive).
-      if (html.indexOf("cf-turnstile") !== -1 || html.indexOf("turnstile") !== -1) {
-        return "cloudflare_turnstile";
-      }
       return "cloudflare_uam";
     }
 
-    // Cloudflare challenge markup even if title isn't the usual one.
-    if (html.indexOf("challenge-platform") !== -1 ||
+    // Cloudflare challenge markup even if the title was already rewritten.
+    // Use very specific paths that only appear on actual challenge pages.
+    if (html.indexOf("/cdn-cgi/challenge-platform/h/") !== -1 ||
         html.indexOf("_cf_chl_opt") !== -1 ||
-        html.indexOf("/cdn-cgi/challenge-platform/") !== -1) {
-      // Still prefer turnstile classification when present.
-      if (html.indexOf("cf-turnstile") !== -1) {
-        return "cloudflare_turnstile";
-      }
+        html.indexOf("cf-im-under-attack") !== -1) {
       return "cloudflare_uam";
-    }
-
-    // DataDome — captcha-delivery.com.
-    if (html.indexOf("captcha-delivery.com") !== -1 ||
-        html.indexOf("geo.captcha-delivery.com") !== -1 ||
-        html.indexOf("datadome") !== -1) {
-      return "datadome";
     }
 
     return "";
@@ -89,11 +98,14 @@ func (p *Page) DetectChallenge() (ChallengeType, error) {
 
 // WaitForChallenge polls the page until any auto-solvable challenge has
 // cleared or the timeout elapses. It returns:
-//   - the challenge type that was detected and resolved (ChallengeNone if
-//     no challenge was ever detected)
+//   - the challenge type that was initially detected (ChallengeNone if no
+//     challenge was present)
 //   - the time spent waiting
-//   - an error if the page stayed on a non-auto-solvable challenge or
-//     timed out without resolving
+//   - an error ONLY if an auto-solvable challenge failed to clear in time
+//
+// Non-auto-solvable challenges (Turnstile, DataDome) are returned without
+// an error — the page did load, it just loaded a challenge. The caller
+// can inspect the returned ChallengeType to decide what to do.
 //
 // A timeout of 0 disables waiting (no-op). Callers should pick a value
 // appropriate to the challenge — Cloudflare UAM typically resolves in
@@ -116,10 +128,12 @@ func (p *Page) WaitForChallenge(timeout time.Duration) (ChallengeType, time.Dura
 		return ChallengeNone, time.Since(start), nil
 	}
 	if !initial.IsAutoSolvable() {
-		return initial, time.Since(start), fmt.Errorf("gosurfer: challenge %q cannot be auto-solved", initial)
+		// Page is on a non-auto-solvable challenge. Return the type so the
+		// caller knows but without an error — the page did "load".
+		return initial, time.Since(start), nil
 	}
 
-	// Poll until the challenge clears or timeout.
+	// Poll until the auto-solvable challenge clears or timeout.
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		time.Sleep(pollInterval)
@@ -131,11 +145,6 @@ func (p *Page) WaitForChallenge(timeout time.Duration) (ChallengeType, time.Dura
 		}
 		if current == ChallengeNone {
 			return initial, time.Since(start), nil
-		}
-		if current != initial && !current.IsAutoSolvable() {
-			// Challenge escalated to something we can't solve (e.g., UAM
-			// failed and became Turnstile). Fail immediately.
-			return current, time.Since(start), fmt.Errorf("gosurfer: challenge escalated to %q", current)
 		}
 	}
 
