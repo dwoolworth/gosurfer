@@ -8,20 +8,29 @@
 //
 // Environment variables:
 //
-//	MCP_PORT           HTTP port (default 8080)
-//	BRAVE_API_KEY      Brave Search API key (required for search tool)
-//	GOSURFER_PROXY     HTTP/SOCKS proxy (e.g. http://sdinas02:3128)
-//	GOSURFER_PROFILE   Chrome profile directory
-//	GOSURFER_HUMAN     "true" for maximum anti-detection (default true)
-//	GOSURFER_HEADLESS  "false" to show browser window (default true)
-//	CHROME_BIN         Custom Chrome binary path
-//	GOSURFER_NO_SANDBOX "true" to disable Chrome sandbox (auto-detected in containers)
+//	MCP_PORT             HTTP port (default 8080)
+//	BRAVE_API_KEY        Brave Search API key (required for search tool)
+//	GOSURFER_PROXY       HTTP/SOCKS proxy (e.g. http://sdinas02:3128)
+//	GOSURFER_PROFILE     Chrome profile directory
+//	GOSURFER_HUMAN       "true" for maximum anti-detection (default true)
+//	GOSURFER_HEADLESS    "false" to show browser window (default true)
+//	CHROME_BIN           Custom Chrome binary path
+//	GOSURFER_NO_SANDBOX  "true" to disable Chrome sandbox (auto-detected in containers)
+//	GOSURFER_MAX_PAGES   Max concurrent browser pages per pod (default 10)
+//	GOSURFER_TOOL_TIMEOUT Per-tool timeout (default 60s, e.g. "90s", "2m")
+//
+// HTTP endpoints:
+//
+//	POST /mcp          MCP streamable HTTP transport
+//	GET  /stats        JSON pool metrics (busy, exhausted, wait times)
+//	GET  /healthz      liveness probe
 package main
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,6 +38,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,7 +48,11 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-var browser *gosurfer.Browser
+var (
+	browser     *gosurfer.Browser
+	pagePool    *PagePool
+	toolTimeout = 60 * time.Second
+)
 
 func main() {
 	port := os.Getenv("MCP_PORT")
@@ -46,11 +60,34 @@ func main() {
 		port = "8080"
 	}
 
+	// Parse tool timeout override.
+	if v := os.Getenv("GOSURFER_TOOL_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			toolTimeout = d
+		} else {
+			log.Printf("invalid GOSURFER_TOOL_TIMEOUT %q, using default %s", v, toolTimeout)
+		}
+	}
+
+	// Parse max pages override.
+	maxPages := 10
+	if v := os.Getenv("GOSURFER_MAX_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxPages = n
+		} else {
+			log.Printf("invalid GOSURFER_MAX_PAGES %q, using default %d", v, maxPages)
+		}
+	}
+
 	// Launch shared browser
 	if err := launchBrowser(); err != nil {
 		log.Fatalf("Failed to launch browser: %v", err)
 	}
 	defer func() { _ = browser.Close() }()
+
+	// Create the page pool backed by the shared browser.
+	pagePool = NewPagePool(browser, maxPages)
+	log.Printf("Page pool initialized: max_pages=%d, tool_timeout=%s", maxPages, toolTimeout)
 
 	// Create MCP server
 	mcpServer := server.NewMCPServer(
@@ -62,8 +99,22 @@ func main() {
 	// Register tools
 	registerTools(mcpServer)
 
-	// Create HTTP transport
-	httpServer := server.NewStreamableHTTPServer(mcpServer)
+	// Create HTTP transport and attach our management endpoints to the same mux.
+	mcpHTTP := server.NewStreamableHTTPServer(mcpServer)
+
+	mux := http.NewServeMux()
+	// MCP lives at /mcp (both POST and GET for the streamable transport).
+	mux.Handle("/mcp", mcpHTTP)
+	mux.Handle("/mcp/", mcpHTTP)
+	// Observability endpoints.
+	mux.HandleFunc("/stats", handleStats)
+	mux.HandleFunc("/healthz", handleHealthz)
+
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	// Graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -72,15 +123,34 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		log.Println("Shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
 		_ = browser.Close()
-		os.Exit(0)
 	}()
 
 	log.Printf("gosurfer MCP server listening on :%s", port)
-	log.Printf("Endpoint: http://localhost:%s/mcp", port)
-	if err := httpServer.Start(":" + port); err != nil {
+	log.Printf("Endpoints: /mcp (MCP), /stats (pool metrics), /healthz")
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+// handleStats returns the page pool's current metrics as JSON.
+func handleStats(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	stats := pagePool.Stats()
+	_ = json.NewEncoder(w).Encode(stats)
+}
+
+// handleHealthz is a simple liveness probe.
+func handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	if browser == nil {
+		http.Error(w, "browser not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
 }
 
 func launchBrowser() error {
@@ -135,15 +205,30 @@ func launchBrowser() error {
 	return nil
 }
 
-// withPage creates a fresh page, runs the function, and closes the page.
+// withPage acquires a page from the pool, runs the function, and releases
+// the page. It respects context cancellation and enforces the tool timeout.
+// If the pool is exhausted, it returns a fast error rather than hanging.
 func withPage(ctx context.Context, fn func(page *gosurfer.Page) (*mcp.CallToolResult, error)) (*mcp.CallToolResult, error) {
-	page, err := browser.NewPage()
-	if err != nil {
-		return mcp.NewToolResultError("failed to create page: " + err.Error()), nil
-	}
-	defer func() { _ = page.Close() }()
+	// Derive a context with the tool timeout so both pool acquisition and
+	// the work itself share the same deadline.
+	workCtx, cancel := context.WithTimeout(ctx, toolTimeout)
+	defer cancel()
 
-	// Wrap with a timeout
+	page, release, err := pagePool.Acquire(workCtx)
+	if err != nil {
+		if errors.Is(err, ErrPoolExhausted) {
+			stats := pagePool.Stats()
+			return mcp.NewToolResultErrorf(
+				"browser pool exhausted: %d/%d slots busy. Retry later or reduce concurrent browsing.",
+				stats.Busy, stats.MaxPages,
+			), nil
+		}
+		return mcp.NewToolResultError("acquire page: " + err.Error()), nil
+	}
+	defer release()
+
+	// Run the work in a goroutine so we can honor the timeout even if the
+	// underlying CDP call is blocking.
 	done := make(chan struct{})
 	var result *mcp.CallToolResult
 	var fnErr error
@@ -155,10 +240,9 @@ func withPage(ctx context.Context, fn func(page *gosurfer.Page) (*mcp.CallToolRe
 	select {
 	case <-done:
 		return result, fnErr
-	case <-ctx.Done():
-		return mcp.NewToolResultError("request timed out"), nil
-	case <-time.After(60 * time.Second):
-		return mcp.NewToolResultError("request timed out after 60s"), nil
+	case <-workCtx.Done():
+		pagePool.RecordTimeout()
+		return mcp.NewToolResultErrorf("request timed out after %s", toolTimeout), nil
 	}
 }
 

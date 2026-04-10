@@ -28,7 +28,9 @@ metadata:
   labels:
     app: gosurfer
 spec:
-  replicas: 1
+  # Scale horizontally: each replica runs its own browser with its own page
+  # pool. Total concurrent browser sessions = replicas * GOSURFER_MAX_PAGES.
+  replicas: 3
   selector:
     matchLabels:
       app: gosurfer
@@ -44,12 +46,22 @@ spec:
             # Route through Tailscale VPN -> sdinas02 NAS -> residential IP
             - name: GOSURFER_PROXY
               value: "http://sdinas02:3128"
-            # Persistent Chrome profile (preserves cookies, login state)
+            # Persistent Chrome profile (preserves cookies, login state).
+            # NOTE: A ReadWriteOnce PVC cannot be shared by multiple replicas.
+            # If scaling beyond 1 replica, either use ReadWriteMany or remove
+            # the profile volume and use ephemeral profiles per-pod.
             - name: GOSURFER_PROFILE
               value: "/home/gosurfer/.chrome-profile"
             # HumanMode: system Chrome + new headless + stealth
             - name: GOSURFER_HUMAN
               value: "true"
+            # Max concurrent browser pages per pod. Cluster capacity =
+            # replicas * this value. Default is 10.
+            - name: GOSURFER_MAX_PAGES
+              value: "10"
+            # Per-tool timeout (supports Go duration syntax).
+            - name: GOSURFER_TOOL_TIMEOUT
+              value: "90s"
             # LLM API keys (from secrets)
             - name: OPENAI_API_KEY
               valueFrom:
@@ -69,6 +81,21 @@ spec:
             # Chrome needs shared memory for rendering
             - name: dshm
               mountPath: /dev/shm
+          ports:
+            - containerPort: 8080
+              name: mcp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               memory: "512Mi"
