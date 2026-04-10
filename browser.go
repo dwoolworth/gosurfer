@@ -135,6 +135,23 @@ func NewBrowser(cfg ...BrowserConfig) (*Browser, error) {
 		l = l.Set("disable-features", "site-per-process,TranslateUI,AutomationControlled")
 	}
 
+	// Portable cookie encryption. By default Chrome encrypts cookies with a
+	// key derived from the OS keyring (macOS Keychain, Gnome Keyring,
+	// kwallet, etc.), producing cookies with a "v10" prefix that can ONLY be
+	// decrypted on the same machine/user. This breaks profile portability:
+	// a profile built on macOS (e.g., during an automated login run) cannot
+	// be loaded by Chrome on Alpine Linux (e.g., in a production container)
+	// because the encryption key is different — Chrome silently treats the
+	// cookies as invalid and the login evaporates.
+	//
+	// --password-store=basic tells Chrome to use a portable obfuscation
+	// scheme that does NOT depend on the OS keyring. --use-mock-keychain
+	// additionally prevents Chrome from trying to touch the macOS Keychain.
+	// Together, these flags make the cookie encryption deterministic
+	// across machines, so a profile built anywhere can be loaded anywhere.
+	l = l.Set("password-store", "basic")
+	l = l.Set("use-mock-keychain")
+
 	if config.ExecPath != "" {
 		l = l.Bin(config.ExecPath)
 	}
